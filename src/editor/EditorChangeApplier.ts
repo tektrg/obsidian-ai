@@ -1,4 +1,5 @@
-import { App, MarkdownView, TFile } from "obsidian";
+import { App, MarkdownView } from "obsidian";
+import { resolveMarkdownView } from "./MarkdownViewResolver";
 
 export interface ApplyResult {
 	filePath: string;
@@ -60,8 +61,8 @@ export class EditorChangeApplier {
 	}
 
 	getActiveMarkdownState(): { hasActiveMarkdown: boolean; filePath?: string; hasSelection: boolean } {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || !view.file || !(view.file instanceof TFile) || view.file.extension !== "md") {
+		const view = resolveMarkdownView(this.app);
+		if (!view || !view.file) {
 			return { hasActiveMarkdown: false, hasSelection: false };
 		}
 		return {
@@ -72,8 +73,8 @@ export class EditorChangeApplier {
 	}
 
 	private getActiveMarkdownView(): MarkdownView {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || !view.file || !(view.file instanceof TFile) || view.file.extension !== "md") {
+		const view = resolveMarkdownView(this.app);
+		if (!view || !view.file) {
 			throw new Error("No active editable markdown note.");
 		}
 		return view;
