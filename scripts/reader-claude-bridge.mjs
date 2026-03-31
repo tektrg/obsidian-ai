@@ -6,6 +6,31 @@ function respond(message) {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function extractTextFromSdkMessages(sdkMessages) {
+	for (let i = sdkMessages.length - 1; i >= 0; i -= 1) {
+		const message = sdkMessages[i];
+		if (!message || typeof message !== "object") continue;
+		if (message.type === "result" && typeof message.result === "string" && message.result.trim()) {
+			return message.result.trim();
+		}
+	}
+
+	const textParts = [];
+	for (const message of sdkMessages) {
+		if (!message || typeof message !== "object") continue;
+		if (message.type !== "assistant") continue;
+		const content = Array.isArray(message.message?.content) ? message.message.content : [];
+		for (const part of content) {
+			if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+				textParts.push(part.text);
+			}
+		}
+	}
+
+	const fallbackText = textParts.join("\n\n").trim();
+	return fallbackText || "";
+}
+
 async function runChat(payload) {
 	const prompt = String(payload?.prompt ?? "").trim();
 	if (!prompt) {
@@ -37,21 +62,12 @@ async function runChat(payload) {
 		sdkMessages.push(msg);
 	}
 
-	const textParts = [];
-	for (const message of sdkMessages) {
-		if (!message || typeof message !== "object") continue;
-		if (message.type !== "assistant") continue;
-		const content = Array.isArray(message.message?.content) ? message.message.content : [];
-		for (const part of content) {
-			if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-				textParts.push(part.text);
-			}
-		}
-	}
-
-	const text = textParts.join("\n\n").trim();
+	const text = extractTextFromSdkMessages(sdkMessages);
 	if (!text) {
-		throw new Error("Claude SDK returned no text output");
+		const seenTypes = sdkMessages
+			.map((message) => (message && typeof message === "object" ? String(message.type ?? "unknown") : "non-object"))
+			.join(", ");
+		throw new Error(`Claude SDK returned no text output (seen message types: ${seenTypes || "none"})`);
 	}
 
 	return { text };
