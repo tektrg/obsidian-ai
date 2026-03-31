@@ -9,6 +9,11 @@
   - Anthropic API key fallback
   - Claude SDK bridge process for Claude Max chat execution
 - This plugin was extracted from the older reader plugin and now owns **all chat/auth functionality**.
+- Reference implementation/model for product direction:
+  - Use [craft-agents-oss](https://github.com/lukilabs/craft-agents-oss) as the model for:
+    - Claude Max account auth usage
+    - chat interface UX and interaction patterns
+    - multi-session, agent-native chat experience where applicable to Obsidian constraints
 
 ## Related project split
 
