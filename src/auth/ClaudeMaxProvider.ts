@@ -157,23 +157,28 @@ export class ClaudeMaxProvider implements AuthProvider {
 	}
 
 	private extractCode(input: string): string {
-		if (!input.trim()) {
+		const trimmed = input.trim();
+		if (!trimmed) {
 			return "";
 		}
-		if (!input.includes("code=")) {
-			return input;
+
+		if (trimmed.includes("code=")) {
+			try {
+				const asUrl = new URL(trimmed);
+				const urlCode = asUrl.searchParams.get("code");
+				if (urlCode?.trim()) {
+					return urlCode.trim();
+				}
+			} catch {
+				const match = trimmed.match(/[?&]code=([^&#]+)/);
+				if (match?.[1]) {
+					return decodeURIComponent(match[1]).trim();
+				}
+			}
 		}
 
-		try {
-			const asUrl = new URL(input);
-			return asUrl.searchParams.get("code") || input;
-		} catch {
-			const match = input.match(/[?&]code=([^&#]+)/);
-			if (match && match[1]) {
-				return decodeURIComponent(match[1]);
-			}
-			return input;
-		}
+		const rawCode = trimmed.split("#", 1)[0]?.trim() ?? "";
+		return rawCode;
 	}
 
 	private async exchangeCodeForTokens(code: string, pending: PendingPkceState): Promise<OAuthTokenResponse> {
@@ -201,7 +206,8 @@ export class ClaudeMaxProvider implements AuthProvider {
 
 		if (response.status < 200 || response.status >= 300) {
 			const msg = this.extractErrorMessage(response.json);
-			throw new Error(`Claude token exchange failed (${response.status}): ${msg}`);
+			const detail = this.stringifyErrorPayload(response.json);
+			throw new Error(`Claude token exchange failed (${response.status}): ${msg}${detail ? ` | payload: ${detail}` : ""}`);
 		}
 
 		return response.json as OAuthTokenResponse;
@@ -230,7 +236,8 @@ export class ClaudeMaxProvider implements AuthProvider {
 
 		if (response.status < 200 || response.status >= 300) {
 			const msg = this.extractErrorMessage(response.json);
-			throw new Error(`Claude token refresh failed (${response.status}): ${msg}`);
+			const detail = this.stringifyErrorPayload(response.json);
+			throw new Error(`Claude token refresh failed (${response.status}): ${msg}${detail ? ` | payload: ${detail}` : ""}`);
 		}
 
 		this.persistTokens(response.json as OAuthTokenResponse);
@@ -301,5 +308,21 @@ export class ClaudeMaxProvider implements AuthProvider {
 		}
 
 		return "Unknown error";
+	}
+
+	private stringifyErrorPayload(payload: unknown): string {
+		if (payload == null) {
+			return "";
+		}
+
+		if (typeof payload === "string") {
+			return payload.trim();
+		}
+
+		try {
+			return JSON.stringify(payload);
+		} catch {
+			return "";
+		}
 	}
 }
