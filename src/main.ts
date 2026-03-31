@@ -4,19 +4,30 @@ import { AuthSession } from "./auth/types";
 import { ClaudeChatClient } from "./chat/ClaudeChatClient";
 import { ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
+import { ActiveFileContextService, ContextScope, formatPromptWithActiveContext } from "./editor/ActiveFileContext";
+import { EditorChangeApplier } from "./editor/EditorChangeApplier";
 import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
+
+interface SendPromptOptions {
+	includeActiveContext: boolean;
+	scope: ContextScope;
+}
 
 export default class ObsidianAiPlugin extends Plugin {
 	settings: ObsidianAiSettings;
 	private authController!: AuthController;
 	private chatClient!: ClaudeChatClient;
 	private sdkBridge!: ClaudeSdkBridge;
+	private activeFileContextService!: ActiveFileContextService;
+	private editorChangeApplier!: EditorChangeApplier;
 
 	async onload() {
 		await this.loadSettings();
 		this.authController = new AuthController(this.settings);
 		this.chatClient = new ClaudeChatClient();
 		this.sdkBridge = new ClaudeSdkBridge(this);
+		this.activeFileContextService = new ActiveFileContextService(this.app);
+		this.editorChangeApplier = new EditorChangeApplier(this.app);
 
 		this.registerView(CLAUDE_CHAT_VIEW_TYPE, (leaf) => new ClaudeChatView(leaf, this));
 		this.addSettingTab(new ObsidianAiSettingTab(this.app, this));
@@ -67,6 +78,29 @@ export default class ObsidianAiPlugin extends Plugin {
 		return this.authController.getSession();
 	}
 
+	getDefaultContextScope(): ContextScope {
+		return this.settings.defaultContextScope;
+	}
+
+	isActiveContextEnabledByDefault(): boolean {
+		return this.settings.includeActiveNoteContextByDefault;
+	}
+
+	shouldConfirmWholeNoteReplace(): boolean {
+		return this.settings.requireConfirmForWholeNoteReplace;
+	}
+
+	getActiveMarkdownState(): { hasActiveMarkdown: boolean; filePath?: string; hasSelection: boolean } {
+		return this.editorChangeApplier.getActiveMarkdownState();
+	}
+
+	getActiveContext(scope: ContextScope) {
+		return this.activeFileContextService.getActiveContext({
+			scope,
+			maxChars: this.settings.activeNoteContextMaxChars,
+		});
+	}
+
 	async startChatLogin(): Promise<AuthSession> {
 		const session = await this.authController.startLogin();
 		await this.saveSettings();
@@ -115,7 +149,8 @@ export default class ObsidianAiPlugin extends Plugin {
 		new Notice("Connection test succeeded");
 	}
 
-	async sendChatPrompt(prompt: string): Promise<string> {
+	async sendChatPrompt(prompt: string, options: SendPromptOptions): Promise<string> {
+		const finalPrompt = this.buildPrompt(prompt, options);
 		if (this.settings.authMode === "claude-max") {
 			const runtimeEnv = await this.authController.getRuntimeEnv();
 			if (!runtimeEnv?.CLAUDE_CODE_OAUTH_TOKEN) {
@@ -127,7 +162,7 @@ export default class ObsidianAiPlugin extends Plugin {
 				throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
 			}
 			return this.sdkBridge.chat({
-				prompt,
+				prompt: finalPrompt,
 				model: this.settings.defaultClaudeModel,
 				systemPrompt: this.settings.chatSystemPrompt,
 				cwd: vaultBasePath,
@@ -144,8 +179,31 @@ export default class ObsidianAiPlugin extends Plugin {
 			authHeaders,
 			model: this.settings.defaultClaudeModel,
 			systemPrompt: this.settings.chatSystemPrompt,
-			prompt
+			prompt: finalPrompt
 		});
+	}
+
+	replaceSelectionWithAssistantText(content: string) {
+		return this.editorChangeApplier.replaceSelection(content);
+	}
+
+	appendAssistantTextToActiveNote(content: string) {
+		return this.editorChangeApplier.appendToNote(content);
+	}
+
+	replaceWholeActiveNote(content: string) {
+		return this.editorChangeApplier.replaceWholeNote(content);
+	}
+
+	private buildPrompt(userPrompt: string, options: SendPromptOptions): string {
+		if (!options.includeActiveContext) {
+			return userPrompt;
+		}
+		const context = this.getActiveContext(options.scope);
+		if (!context) {
+			return userPrompt;
+		}
+		return formatPromptWithActiveContext(userPrompt, context);
 	}
 
 	async loadSettings() {

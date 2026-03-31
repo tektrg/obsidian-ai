@@ -95,7 +95,10 @@ export class ReaderChatView extends ItemView {
 			this.promptInputEl.value = "";
 
 			try {
-				const response = await this.plugin.sendChatPrompt(prompt);
+				const response = await this.plugin.sendChatPrompt(prompt, {
+					includeActiveContext: false,
+					scope: "note",
+				});
 				this.appendOutput(`Claude: ${response}`);
 			} catch (error) {
 				const msg = error instanceof Error ? error.message : String(error);
