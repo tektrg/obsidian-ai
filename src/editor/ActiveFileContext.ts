@@ -1,4 +1,5 @@
-import { App, MarkdownView, TFile } from "obsidian";
+import { App } from "obsidian";
+import { resolveMarkdownView } from "./MarkdownViewResolver";
 
 export type ContextScope = "selection" | "note";
 
@@ -28,13 +29,13 @@ export class ActiveFileContextService {
 	}
 
 	getActiveContext(options: GetActiveContextOptions): ActiveFileContextSnapshot | null {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const view = resolveMarkdownView(this.app);
 		if (!view) {
 			return null;
 		}
 
 		const file = view.file;
-		if (!file || !(file instanceof TFile) || file.extension !== "md") {
+		if (!file) {
 			return null;
 		}
 
