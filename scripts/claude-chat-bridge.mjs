@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 function respond(message) {
@@ -31,6 +33,64 @@ function extractTextFromSdkMessages(sdkMessages) {
 	return fallbackText || "";
 }
 
+function extractActiveFilePath(prompt) {
+	if (!prompt) return "";
+	const markerStart = "ACTIVE_FILE_CONTEXT_START";
+	const markerEnd = "ACTIVE_FILE_CONTEXT_END";
+	const start = prompt.indexOf(markerStart);
+	const end = prompt.indexOf(markerEnd);
+	const scope = start >= 0 && end > start ? prompt.slice(start, end) : prompt;
+	const match = scope.match(/File path:\s*(.+)/i);
+	if (!match?.[1]) return "";
+	return String(match[1]).trim();
+}
+
+function resolveTargetFile(payload, prompt, cwd) {
+	const fromPayload = typeof payload?.activeFilePath === "string" ? payload.activeFilePath.trim() : "";
+	const fromPrompt = extractActiveFilePath(prompt);
+	const relativePath = fromPayload || fromPrompt;
+	if (!relativePath) return { relativePath: "", absolutePath: "" };
+	return {
+		relativePath,
+		absolutePath: path.resolve(cwd, relativePath),
+	};
+}
+
+function readFileSafe(filePath) {
+	if (!filePath) return null;
+	try {
+		if (!fs.existsSync(filePath)) return null;
+		return fs.readFileSync(filePath, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+function isEditIntent(text) {
+	if (!text) return false;
+	return /(update|edit|rewrite|modify|change|fix|patch|mark\s+.*todo|apply\s+changes)/i.test(text);
+}
+
+function buildSystemPrompt(systemPrompt, prompt, targetFile) {
+	const segments = [];
+	if (systemPrompt?.trim()) {
+		segments.push(systemPrompt.trim());
+	}
+
+	const shouldForceEditTool = isEditIntent(prompt);
+	if (shouldForceEditTool && targetFile?.relativePath) {
+		segments.push([
+			"When the user asks to update/edit/modify the page, you must perform an actual file edit using Claude Code tools (Edit/Write).",
+			"Do not return only a summary when an update was requested.",
+			`Target note path: ${targetFile.relativePath}`,
+			"Apply changes directly to that file unless user explicitly asks for a preview only.",
+			"After editing, give a concise confirmation of what was changed.",
+		].join("\n"));
+	}
+
+	return segments.join("\n\n").trim() || undefined;
+}
+
 async function runChat(payload) {
 	const prompt = String(payload?.prompt ?? "").trim();
 	if (!prompt) {
@@ -40,6 +100,8 @@ async function runChat(payload) {
 	const model = String(payload?.model ?? "claude-sonnet-4-5").trim();
 	const systemPrompt = typeof payload?.systemPrompt === "string" ? payload.systemPrompt : "";
 	const cwd = typeof payload?.cwd === "string" && payload.cwd.trim() ? payload.cwd : process.cwd();
+	const targetFile = resolveTargetFile(payload, prompt, cwd);
+	const before = readFileSafe(targetFile.absolutePath);
 
 	const sdkMessages = [];
 	for await (const msg of query({
@@ -47,16 +109,14 @@ async function runChat(payload) {
 		options: {
 			model,
 			cwd,
-			maxTurns: 1,
+			maxTurns: 8,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
-			systemPrompt: systemPrompt
-				? {
-					type: "preset",
-					preset: "claude_code",
-					append: systemPrompt
-				}
-				: undefined,
+			systemPrompt: {
+				type: "preset",
+				preset: "claude_code",
+				append: buildSystemPrompt(systemPrompt, prompt, targetFile),
+			},
 		}
 	})) {
 		sdkMessages.push(msg);
@@ -70,7 +130,14 @@ async function runChat(payload) {
 		throw new Error(`Claude SDK returned no text output (seen message types: ${seenTypes || "none"})`);
 	}
 
-	return { text };
+	const after = readFileSafe(targetFile.absolutePath);
+	const fileChanged = before !== null && after !== null && before !== after;
+
+	return {
+		text,
+		fileChanged,
+		editedFilePath: fileChanged ? targetFile.relativePath : undefined,
+	};
 }
 
 async function handleLine(rawLine) {

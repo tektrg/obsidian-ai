@@ -19,6 +19,13 @@ interface ChatParams {
 	systemPrompt?: string;
 	cwd: string;
 	env: Record<string, string>;
+	activeFilePath?: string;
+}
+
+interface ChatResult {
+	text: string;
+	fileChanged?: boolean;
+	editedFilePath?: string;
 }
 
 const REQUEST_TIMEOUT_MS = 45000;
@@ -35,19 +42,25 @@ export class ClaudeSdkBridge {
 		await this.callBridge("ping", {}, env);
 	}
 
-	async chat(params: ChatParams): Promise<string> {
+	async chat(params: ChatParams): Promise<ChatResult> {
 		const result = await this.callBridge("chat", {
 			prompt: params.prompt,
 			model: params.model,
 			systemPrompt: params.systemPrompt,
 			cwd: params.cwd,
+			activeFilePath: params.activeFilePath,
 		}, params.env);
 
 		const text = result?.text;
 		if (typeof text !== "string" || !text.trim()) {
 			throw new Error("Claude bridge returned empty response.");
 		}
-		return text;
+
+		return {
+			text,
+			fileChanged: result?.fileChanged === true,
+			editedFilePath: typeof result?.editedFilePath === "string" ? result.editedFilePath : undefined,
+		};
 	}
 
 	private async callBridge(
