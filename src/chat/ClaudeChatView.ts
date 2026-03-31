@@ -66,6 +66,11 @@ export class ClaudeChatView extends ItemView {
 		this.render();
 	}
 
+	refreshActiveContext(): void {
+		this.renderActiveFileStatus();
+		this.updateEditButtons();
+	}
+
 	private render(): void {
 		const { contentEl } = this;
 		contentEl.empty();

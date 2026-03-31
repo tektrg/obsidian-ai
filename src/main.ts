@@ -55,6 +55,10 @@ export default class ObsidianAiPlugin extends Plugin {
 				void this.testChatConnection();
 			}
 		});
+
+		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshChatViewsActiveContext()));
+		this.registerEvent(this.app.workspace.on("file-open", () => this.refreshChatViewsActiveContext()));
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshChatViewsActiveContext()));
 	}
 
 	async onunload() {
@@ -114,73 +118,57 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async testChatConnection(): Promise<void> {
-		if (this.settings.authMode === "claude-max") {
-			const runtimeEnv = await this.authController.getRuntimeEnv();
-			if (!runtimeEnv?.CLAUDE_CODE_OAUTH_TOKEN) {
-				throw new Error("No Claude Max OAuth token available. Complete sign-in first.");
-			}
-			const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
-			const vaultBasePath = adapterWithBasePath.getBasePath?.();
-			if (!vaultBasePath) {
-				throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
-			}
-			await this.sdkBridge.ping(runtimeEnv);
-			await this.sdkBridge.chat({
-				prompt: "Reply with exactly: OK",
-				model: this.settings.defaultClaudeModel,
-				systemPrompt: this.settings.chatSystemPrompt,
-				cwd: vaultBasePath,
-				env: runtimeEnv,
-			});
-			new Notice("Connection test succeeded");
-			return;
-		}
-
-		const authHeaders = await this.authController.getAuthHeaders();
-		if (!authHeaders) {
+		const runtimeEnv = await this.authController.getRuntimeEnv();
+		if (!runtimeEnv) {
 			throw new Error("No auth token available. Configure an Anthropic API key or complete Claude Max login.");
 		}
-
-		await this.chatClient.testConnection({
-			authHeaders,
+		if (this.settings.authMode === "claude-max" && !runtimeEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+			throw new Error("No Claude Max OAuth token available. Complete sign-in first.");
+		}
+		const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
+		const vaultBasePath = adapterWithBasePath.getBasePath?.();
+		if (!vaultBasePath) {
+			throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
+		}
+		await this.sdkBridge.ping(runtimeEnv);
+		await this.sdkBridge.chat({
+			prompt: "Reply with exactly: OK",
 			model: this.settings.defaultClaudeModel,
-			systemPrompt: this.settings.chatSystemPrompt
+			systemPrompt: this.settings.chatSystemPrompt,
+			cwd: vaultBasePath,
+			env: runtimeEnv,
 		});
 		new Notice("Connection test succeeded");
 	}
 
 	async sendChatPrompt(prompt: string, options: SendPromptOptions): Promise<string> {
-		const finalPrompt = this.buildPrompt(prompt, options);
-		if (this.settings.authMode === "claude-max") {
-			const runtimeEnv = await this.authController.getRuntimeEnv();
-			if (!runtimeEnv?.CLAUDE_CODE_OAUTH_TOKEN) {
-				throw new Error("No Claude Max OAuth token available. Complete sign-in first.");
-			}
-			const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
-			const vaultBasePath = adapterWithBasePath.getBasePath?.();
-			if (!vaultBasePath) {
-				throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
-			}
-			return this.sdkBridge.chat({
-				prompt: finalPrompt,
-				model: this.settings.defaultClaudeModel,
-				systemPrompt: this.settings.chatSystemPrompt,
-				cwd: vaultBasePath,
-				env: runtimeEnv,
-			});
-		}
-
-		const authHeaders = await this.authController.getAuthHeaders();
-		if (!authHeaders) {
+		const context = options.includeActiveContext ? this.getActiveContext(options.scope) : null;
+		const finalPrompt = context ? formatPromptWithActiveContext(prompt, context) : prompt;
+		const runtimeEnv = await this.authController.getRuntimeEnv();
+		if (!runtimeEnv) {
 			throw new Error("No auth token available. Configure an Anthropic API key or complete Claude Max login.");
 		}
-
-		return this.chatClient.sendMessage({
-			authHeaders,
+		if (this.settings.authMode === "claude-max" && !runtimeEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+			throw new Error("No Claude Max OAuth token available. Complete sign-in first.");
+		}
+		const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
+		const vaultBasePath = adapterWithBasePath.getBasePath?.();
+		if (!vaultBasePath) {
+			throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
+		}
+		const result = await this.sdkBridge.chat({
+			prompt: finalPrompt,
 			model: this.settings.defaultClaudeModel,
 			systemPrompt: this.settings.chatSystemPrompt,
-			prompt: finalPrompt
+			cwd: vaultBasePath,
+			env: runtimeEnv,
+			activeFilePath: context?.filePath,
 		});
+		if (result.fileChanged) {
+			const editedPath = result.editedFilePath ?? context?.filePath ?? "active note";
+			return `${result.text}\n\n✅ Updated note: ${editedPath}`;
+		}
+		return result.text;
 	}
 
 	replaceSelectionWithAssistantText(content: string) {
@@ -193,6 +181,15 @@ export default class ObsidianAiPlugin extends Plugin {
 
 	replaceWholeActiveNote(content: string) {
 		return this.editorChangeApplier.replaceWholeNote(content);
+	}
+
+	private refreshChatViewsActiveContext(): void {
+		const leaves = this.app.workspace.getLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
+		for (const leaf of leaves) {
+			if (leaf.view instanceof ClaudeChatView) {
+				leaf.view.refreshActiveContext();
+			}
+		}
 	}
 
 	private buildPrompt(userPrompt: string, options: SendPromptOptions): string {
