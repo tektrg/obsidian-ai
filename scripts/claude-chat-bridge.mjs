@@ -8,6 +8,10 @@ function respond(message) {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function emitEvent(id, event) {
+	respond({ id, ok: true, event });
+}
+
 function extractTextFromSdkMessages(sdkMessages) {
 	for (let i = sdkMessages.length - 1; i >= 0; i -= 1) {
 		const message = sdkMessages[i];
@@ -17,20 +21,21 @@ function extractTextFromSdkMessages(sdkMessages) {
 		}
 	}
 
-	const textParts = [];
-	for (const message of sdkMessages) {
+	for (let i = sdkMessages.length - 1; i >= 0; i -= 1) {
+		const message = sdkMessages[i];
 		if (!message || typeof message !== "object") continue;
 		if (message.type !== "assistant") continue;
 		const content = Array.isArray(message.message?.content) ? message.message.content : [];
-		for (const part of content) {
-			if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-				textParts.push(part.text);
-			}
+		const parts = content
+			.filter((part) => part && typeof part === "object" && part.type === "text" && typeof part.text === "string")
+			.map((part) => part.text)
+			.filter(Boolean);
+		if (parts.length) {
+			return parts.join("\n\n").trim();
 		}
 	}
 
-	const fallbackText = textParts.join("\n\n").trim();
-	return fallbackText || "";
+	return "";
 }
 
 function extractActiveFilePath(prompt) {
@@ -91,7 +96,128 @@ function buildSystemPrompt(systemPrompt, prompt, targetFile) {
 	return segments.join("\n\n").trim() || undefined;
 }
 
-async function runChat(payload) {
+function summarizeToolInput(input) {
+	if (input == null) return "";
+	if (typeof input === "string") return input.slice(0, 220);
+	try {
+		return JSON.stringify(input).slice(0, 220);
+	} catch {
+		return "";
+	}
+}
+
+function parseStreamEvent(id, event, state) {
+	if (!event || typeof event !== "object") return;
+
+	if (event.type === "content_block_start") {
+		const block = event.content_block;
+		if (!block || typeof block !== "object") return;
+
+		if (block.type === "tool_use" || block.type === "mcp_tool_use" || block.type === "server_tool_use") {
+			const stepId = typeof block.id === "string" ? block.id : `tool-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+			const toolName = typeof block.name === "string" ? block.name : "Tool";
+			state.toolByIndex.set(event.index, { stepId, toolName });
+			emitEvent(id, {
+				type: "tool_started",
+				toolName,
+				stepId,
+				detail: summarizeToolInput(block.input),
+			});
+		}
+		return;
+	}
+
+	if (event.type === "content_block_delta") {
+		const delta = event.delta;
+		if (!delta || typeof delta !== "object") return;
+
+		if (delta.type === "text_delta" && typeof delta.text === "string" && delta.text) {
+			state.seenAssistantDelta = true;
+			emitEvent(id, { type: "assistant_delta", text: delta.text });
+			return;
+		}
+
+		if (delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking) {
+			emitEvent(id, { type: "thinking_delta", text: delta.thinking });
+			return;
+		}
+
+		if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+			const info = state.toolByIndex.get(event.index);
+			if (info) {
+				emitEvent(id, {
+					type: "tool_started",
+					toolName: info.toolName,
+					stepId: info.stepId,
+					detail: `input: ${delta.partial_json.slice(0, 180)}`,
+				});
+			}
+		}
+		return;
+	}
+
+	if (event.type === "content_block_stop") {
+		const info = state.toolByIndex.get(event.index);
+		if (info) {
+			emitEvent(id, {
+				type: "tool_finished",
+				toolName: info.toolName,
+				stepId: info.stepId,
+				ok: true,
+			});
+			state.toolByIndex.delete(event.index);
+		}
+	}
+}
+
+function emitMessageEvents(id, message, state) {
+	if (!message || typeof message !== "object") return;
+
+	if (message.type === "stream_event") {
+		parseStreamEvent(id, message.event, state);
+		return;
+	}
+
+	if (message.type === "tool_progress") {
+		emitEvent(id, {
+			type: "tool_started",
+			toolName: typeof message.tool_name === "string" ? message.tool_name : "Tool",
+			stepId: typeof message.tool_use_id === "string" ? message.tool_use_id : undefined,
+			detail: typeof message.elapsed_time_seconds === "number"
+				? `running ${message.elapsed_time_seconds.toFixed(1)}s`
+				: "running",
+		});
+		return;
+	}
+
+	if (message.type === "tool_use_summary" && typeof message.summary === "string" && message.summary.trim()) {
+		emitEvent(id, { type: "status", text: message.summary.trim() });
+		return;
+	}
+
+	if (message.type === "assistant") {
+		if (state.seenAssistantDelta) {
+			return;
+		}
+		const content = Array.isArray(message.message?.content) ? message.message.content : [];
+		for (const part of content) {
+			if (!part || typeof part !== "object") continue;
+			if (part.type === "text" && typeof part.text === "string" && part.text) {
+				emitEvent(id, { type: "assistant_delta", text: part.text });
+			}
+			if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking) {
+				emitEvent(id, { type: "thinking_delta", text: part.thinking });
+			}
+		}
+		return;
+	}
+
+	if (message.type === "system" && message.subtype === "status" && message.status) {
+		emitEvent(id, { type: "status", text: String(message.status) });
+	}
+}
+
+async function runChat(id, payload) {
 	const prompt = String(payload?.prompt ?? "").trim();
 	if (!prompt) {
 		throw new Error("Missing prompt");
@@ -104,6 +230,11 @@ async function runChat(payload) {
 	const before = readFileSafe(targetFile.absolutePath);
 
 	const sdkMessages = [];
+	const state = {
+		toolByIndex: new Map(),
+		seenAssistantDelta: false,
+	};
+
 	for await (const msg of query({
 		prompt,
 		options: {
@@ -112,6 +243,7 @@ async function runChat(payload) {
 			maxTurns: 8,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
+			includePartialMessages: true,
 			systemPrompt: {
 				type: "preset",
 				preset: "claude_code",
@@ -120,6 +252,7 @@ async function runChat(payload) {
 		}
 	})) {
 		sdkMessages.push(msg);
+		emitMessageEvents(id, msg, state);
 	}
 
 	const text = extractTextFromSdkMessages(sdkMessages);
@@ -162,7 +295,7 @@ async function handleLine(rawLine) {
 		}
 
 		if (method === "chat") {
-			const result = await runChat(req.payload ?? {});
+			const result = await runChat(id, req.payload ?? {});
 			respond({ id, ok: true, result });
 			return;
 		}

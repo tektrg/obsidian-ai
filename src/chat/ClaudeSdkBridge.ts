@@ -6,14 +6,15 @@ interface BridgeRequest {
 	payload?: Record<string, unknown>;
 }
 
-interface BridgeResponse {
+interface BridgeResponseLine {
 	id: string | null;
 	ok: boolean;
+	event?: BridgeStreamEvent;
 	result?: Record<string, unknown>;
 	error?: string;
 }
 
-interface ChatParams {
+export interface ChatParams {
 	prompt: string;
 	model: string;
 	systemPrompt?: string;
@@ -22,13 +23,24 @@ interface ChatParams {
 	activeFilePath?: string;
 }
 
-interface ChatResult {
+export interface ChatResult {
 	text: string;
 	fileChanged?: boolean;
 	editedFilePath?: string;
 }
 
-const REQUEST_TIMEOUT_MS = 45000;
+export type BridgeStreamEvent =
+	| { type: "assistant_delta"; text: string }
+	| { type: "thinking_delta"; text: string }
+	| { type: "tool_started"; toolName: string; detail?: string; stepId?: string }
+	| { type: "tool_finished"; toolName: string; detail?: string; stepId?: string; ok?: boolean }
+	| { type: "status"; text: string };
+
+export interface ChatStreamHandlers {
+	onEvent?: (event: BridgeStreamEvent) => void;
+}
+
+const REQUEST_TIMEOUT_MS = 120000;
 
 export class ClaudeSdkBridge {
 	private plugin: Plugin;
@@ -43,13 +55,33 @@ export class ClaudeSdkBridge {
 	}
 
 	async chat(params: ChatParams): Promise<ChatResult> {
+		let streamedText = "";
+		const result = await this.chatStream(params, {
+			onEvent: (event) => {
+				if (event.type === "assistant_delta") {
+					streamedText += event.text;
+				}
+			},
+		});
+
+		if (!result.text && streamedText.trim()) {
+			return {
+				...result,
+				text: streamedText.trim(),
+			};
+		}
+
+		return result;
+	}
+
+	async chatStream(params: ChatParams, handlers: ChatStreamHandlers = {}): Promise<ChatResult> {
 		const result = await this.callBridge("chat", {
 			prompt: params.prompt,
 			model: params.model,
 			systemPrompt: params.systemPrompt,
 			cwd: params.cwd,
 			activeFilePath: params.activeFilePath,
-		}, params.env);
+		}, params.env, handlers);
 
 		const text = result?.text;
 		if (typeof text !== "string" || !text.trim()) {
@@ -66,7 +98,8 @@ export class ClaudeSdkBridge {
 	private async callBridge(
 		method: "ping" | "chat",
 		payload: Record<string, unknown>,
-		envVars: Record<string, string>
+		envVars: Record<string, string>,
+		handlers: ChatStreamHandlers = {}
 	): Promise<Record<string, unknown> | undefined> {
 		const adapterWithBasePath = this.plugin.app.vault.adapter as unknown as { getBasePath?: () => string };
 		const basePath = adapterWithBasePath.getBasePath?.();
@@ -125,9 +158,10 @@ export class ClaudeSdkBridge {
 		});
 
 		return await new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
-			let stdout = "";
+			let stdoutBuffer = "";
 			let stderr = "";
 			let settled = false;
+			let finalResult: Record<string, unknown> | undefined;
 
 			const timeout = window.setTimeout(() => {
 				if (settled) return;
@@ -136,8 +170,48 @@ export class ClaudeSdkBridge {
 				reject(new Error(`Claude bridge timeout after ${REQUEST_TIMEOUT_MS}ms`));
 			}, REQUEST_TIMEOUT_MS);
 
+			const handleLine = (lineRaw: string) => {
+				const line = lineRaw.trim();
+				if (!line) return;
+
+				let parsed: BridgeResponseLine;
+				try {
+					parsed = JSON.parse(line) as BridgeResponseLine;
+				} catch {
+					throw new Error(`Claude bridge invalid JSON output: ${line}`);
+				}
+
+				if (!parsed.ok) {
+					throw new Error(parsed.error || "Claude bridge request failed");
+				}
+
+				if (parsed.event) {
+					handlers.onEvent?.(parsed.event);
+				}
+				if (parsed.result) {
+					finalResult = parsed.result;
+				}
+			};
+
 			spawned.stdout.on("data", (chunk: string) => {
-				stdout += String(chunk);
+				stdoutBuffer += String(chunk);
+				let idx = stdoutBuffer.indexOf("\n");
+				while (idx >= 0) {
+					const line = stdoutBuffer.slice(0, idx);
+					stdoutBuffer = stdoutBuffer.slice(idx + 1);
+					try {
+						handleLine(line);
+					} catch (error) {
+						if (!settled) {
+							settled = true;
+							window.clearTimeout(timeout);
+							spawned.kill();
+							reject(error instanceof Error ? error : new Error(String(error)));
+						}
+						return;
+					}
+					idx = stdoutBuffer.indexOf("\n");
+				}
 			});
 
 			spawned.stderr.on("data", (chunk: string) => {
@@ -155,26 +229,22 @@ export class ClaudeSdkBridge {
 				if (settled) return;
 				settled = true;
 				window.clearTimeout(timeout);
-				const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-				const finalLine = lines[lines.length - 1];
-				if (!finalLine) {
-					reject(new Error(`Claude bridge returned no output.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
+
+				if (stdoutBuffer.trim()) {
+					try {
+						handleLine(stdoutBuffer);
+					} catch (error) {
+						reject(error instanceof Error ? error : new Error(String(error)));
+						return;
+					}
+				}
+
+				if (!finalResult) {
+					reject(new Error(`Claude bridge returned no result.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
 					return;
 				}
 
-				let parsed: BridgeResponse;
-				try {
-					parsed = JSON.parse(finalLine) as BridgeResponse;
-				} catch {
-					reject(new Error(`Claude bridge invalid JSON output: ${finalLine}`));
-					return;
-				}
-
-				if (!parsed.ok) {
-					reject(new Error(parsed.error || "Claude bridge request failed"));
-					return;
-				}
-				resolve(parsed.result);
+				resolve(finalResult);
 			});
 
 			spawned.stdin.write(`${JSON.stringify(request)}\n`);
