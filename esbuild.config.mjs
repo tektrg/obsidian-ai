@@ -1,8 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "node:module";
-import fs from "node:fs";
-import path from "node:path";
 
 const banner =
 	`/*
@@ -13,63 +11,11 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
-let pluginDir = "";
-try {
-	const envPath = path.resolve(process.cwd(), ".env");
-	if (fs.existsSync(envPath)) {
-		const envLines = fs.readFileSync(envPath, "utf8").split("\n");
-		for (const line of envLines) {
-			if (line.trim().startsWith("OBSIDIAN_PLUGIN_DIR=")) {
-				pluginDir = line.substring(line.indexOf("=") + 1).trim();
-				if (pluginDir.startsWith('"') && pluginDir.endsWith('"')) {
-					pluginDir = pluginDir.substring(1, pluginDir.length - 1);
-				} else if (pluginDir.startsWith("'") && pluginDir.endsWith("'")) {
-					pluginDir = pluginDir.substring(1, pluginDir.length - 1);
-				}
-				break;
-			}
-		}
-	} else {
-		console.log("ℹ️  No .env file found at root. Skipping auto-copy.");
-	}
-} catch (e) {
-	console.error("⚠️  Error reading .env file:", e.message);
-}
-
-const copyToObsidianPlugin = {
-	name: "copy-to-obsidian",
-	setup(build) {
-		build.onEnd(() => {
-			if (!pluginDir) {
-				console.log("ℹ️  OBSIDIAN_PLUGIN_DIR is not set in .env. Skipping auto-copy.");
-				return;
-			}
-			try {
-				if (!fs.existsSync(pluginDir)) {
-					console.log(`ℹ️  Creating directory: ${pluginDir}`);
-					fs.mkdirSync(pluginDir, { recursive: true });
-				}
-				const filesToCopy = ["main.js", "manifest.json", "styles.css"];
-				for (const file of filesToCopy) {
-					if (fs.existsSync(file)) {
-						fs.copyFileSync(file, path.join(pluginDir, file));
-					}
-				}
-				const sourceScript = path.join("scripts", "claude-chat-bridge.mjs");
-				const targetScriptDir = path.join(pluginDir, "scripts");
-				if (!fs.existsSync(targetScriptDir)) {
-					fs.mkdirSync(targetScriptDir, { recursive: true });
-				}
-				if (fs.existsSync(sourceScript)) {
-					fs.copyFileSync(sourceScript, path.join(targetScriptDir, "claude-chat-bridge.mjs"));
-				}
-				console.log(`✅  Successfully copied plugin files to: ${pluginDir}`);
-			} catch (e) {
-				console.error("❌  Error copying files to Obsidian plugin directory:", e);
-			}
-		});
-	},
-};
+// Using symlink for hot reload:
+// The test vault plugin folder is symlinked to this project root:
+// /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai -> /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+// When you run `npm run dev`, changes are built to main.js in this folder,
+// and Obsidian hot-reloads automatically via the symlink.
 
 const context = await esbuild.context({
 	banner: {
@@ -100,7 +46,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
-	plugins: [copyToObsidianPlugin],
+	plugins: [],
 });
 
 if (prod) {
