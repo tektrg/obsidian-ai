@@ -1,7 +1,6 @@
-import { App, ItemView, MarkdownRenderer, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ObsidianAiPlugin from "../main";
 import type { AuthSession } from "../auth/types";
-import type { ContextScope } from "../editor/ActiveFileContext";
 import type { BridgeStreamEvent } from "./ClaudeSdkBridge";
 
 export const CLAUDE_CHAT_VIEW_TYPE = "claude-chat-view";
@@ -38,15 +37,16 @@ export class ClaudeChatView extends ItemView {
 	private statusEl: HTMLElement | null = null;
 	private threadEl: HTMLElement | null = null;
 	private promptInputEl: HTMLTextAreaElement | null = null;
-	private includeContextToggleEl: HTMLInputElement | null = null;
-	private scopeEl: HTMLSelectElement | null = null;
 	private contextChipEl: HTMLElement | null = null;
-	private helperLineEl: HTMLElement | null = null;
+	private settingsPanelEl: HTMLElement | null = null;
+	private contextEnabled = true;
 
 	private sendBtn: HTMLButtonElement | null = null;
 	private streamingAssistantBubbleEl: HTMLElement | null = null;
 	private streamingAssistantTextEl: HTMLElement | null = null;
 	private streamingThinkingTextEl: HTMLElement | null = null;
+	private thinkingPanelEl: HTMLElement | null = null;
+	private thinkingExpandBtnEl: HTMLElement | null = null;
 	private thinkingDetailsEl: HTMLDetailsElement | null = null;
 	private streamingToolContainerEl: HTMLElement | null = null;
 	private toolStepEls = new Map<string, HTMLElement>();
@@ -99,41 +99,17 @@ export class ClaudeChatView extends ItemView {
 		this.renderStatus(this.plugin.getChatAuthSession());
 
 		const headerActionsEl = headerEl.createDiv({ cls: "claude-chat-header-actions" });
-		const loginBtn = headerActionsEl.createEl("button", { cls: "clickable-icon claude-chat-icon-btn", attr: { "aria-label": "Sign in" } });
-		setIcon(loginBtn, "log-in");
-		loginBtn.addEventListener("click", async () => {
-			try {
-				const session = await this.plugin.startChatLogin();
-				this.renderStatus(session);
-				this.appendSystemMessage(`Auth result: ${this.describeSession(session)}`);
-			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				new Notice(msg);
-				this.appendSystemMessage(`Sign in failed: ${msg}`, "error");
-			}
+		const menuBtn = headerActionsEl.createEl("button", {
+			cls: "clickable-icon claude-chat-icon-btn claude-chat-burger-btn",
+			attr: { "aria-label": "Menu" }
 		});
+		setIcon(menuBtn, "menu");
+		menuBtn.addEventListener("click", () => this.toggleSettingsPanel());
 
-		const testBtn = headerActionsEl.createEl("button", { cls: "clickable-icon claude-chat-icon-btn", attr: { "aria-label": "Test Connection" } });
-		setIcon(testBtn, "activity");
-		testBtn.addEventListener("click", async () => {
-			try {
-				await this.plugin.testChatConnection();
-				this.appendSystemMessage("Connection test succeeded.", "success");
-				this.renderStatus(this.plugin.getChatAuthSession());
-			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				new Notice(msg);
-				this.appendSystemMessage(`Connection test failed: ${msg}`, "error");
-			}
-		});
-
-		const signOutBtn = headerActionsEl.createEl("button", { cls: "clickable-icon claude-chat-icon-btn", attr: { "aria-label": "Sign out" } });
-		setIcon(signOutBtn, "log-out");
-		signOutBtn.addEventListener("click", async () => {
-			const session = await this.plugin.signOutChat();
-			this.renderStatus(session);
-			this.appendSystemMessage("Signed out.");
-		});
+		// Internal Settings Panel (initially hidden)
+		this.settingsPanelEl = shellEl.createDiv({ cls: "claude-chat-settings-panel" });
+		this.settingsPanelEl.style.display = "none";
+		this.renderSettingsPanel();
 
 		this.threadEl = shellEl.createDiv({ cls: "claude-chat-thread" });
 		this.appendSystemMessage("Ready. Ask Claude about your active note.");
@@ -141,21 +117,10 @@ export class ClaudeChatView extends ItemView {
 		const composerEl = shellEl.createDiv({ cls: "claude-chat-composer" });
 		const pillRow = composerEl.createDiv({ cls: "claude-chat-pill-row" });
 
-		const contextToggleWrap = pillRow.createDiv({ cls: "claude-chat-context-toggle-wrap" });
-		const includeLabel = contextToggleWrap.createEl("label", { cls: "claude-chat-toggle-label" });
-		this.includeContextToggleEl = includeLabel.createEl("input", { type: "checkbox" });
-		this.includeContextToggleEl.checked = this.plugin.isActiveContextEnabledByDefault();
-		includeLabel.appendText(" Context");
-		this.includeContextToggleEl.addEventListener("change", () => this.renderContextChip());
+		const contextInfoWrap = pillRow.createDiv({ cls: "claude-chat-context-info-wrap" });
 
-		this.scopeEl = contextToggleWrap.createEl("select", { cls: "claude-chat-scope-select" });
-		this.scopeEl.createEl("option", { text: "Selection", value: "selection" });
-		this.scopeEl.createEl("option", { text: "Whole note", value: "note" });
-		this.scopeEl.value = this.plugin.getDefaultContextScope();
-		this.scopeEl.addEventListener("change", () => this.renderContextChip());
+		this.contextChipEl = contextInfoWrap.createDiv({ cls: "claude-chat-chip-container" });
 
-		this.contextChipEl = pillRow.createDiv({ cls: "claude-chat-chip-container" });
-		this.helperLineEl = composerEl.createDiv({ cls: "claude-chat-helper-line" });
 		this.renderContextChip();
 
 		const promptContainer = composerEl.createDiv({ cls: "claude-chat-prompt-container" });
@@ -183,6 +148,13 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 
+		// Check auth before sending
+		const authCheck = await this.plugin.validateAuth();
+		if (!authCheck.valid) {
+			this.appendSystemMessage(authCheck.message, "error");
+			return;
+		}
+
 		this.appendUserMessage(prompt);
 		this.promptInputEl.value = "";
 		this.setSendingState(true);
@@ -190,8 +162,7 @@ export class ClaudeChatView extends ItemView {
 
 		try {
 			const response = await this.plugin.sendChatPromptStream(prompt, {
-				includeActiveContext: this.includeContextToggleEl?.checked ?? false,
-				scope: this.getSelectedScope(),
+				includeActiveContext: this.contextEnabled,
 			}, {
 				onEvent: (event) => this.handleStreamEvent(event),
 			});
@@ -200,13 +171,66 @@ export class ClaudeChatView extends ItemView {
 			this.updateEditButtons();
 			this.renderContextChip();
 		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			new Notice(msg);
-			this.appendSystemMessage(`Claude error: ${msg}`, "error");
+			this.handleAuthError(error);
 			this.endStreamingBlocks();
 		} finally {
 			this.setSendingState(false);
 		}
+	}
+
+	/**
+	 * Handle errors with specific messages for auth failures.
+	 * Provides actionable guidance to users.
+	 */
+	private handleAuthError(error: unknown): void {
+		const msg = error instanceof Error ? error.message : String(error);
+
+		// Authentication errors
+		if (msg.includes("401") || msg.includes("authentication_error") || msg.includes("Invalid bearer token")) {
+			new Notice("Authentication failed. Please sign in again.");
+			this.appendSystemMessage(
+				'Authentication failed. Your session has expired or been revoked. Click "Sign out" then "Sign in" to re-authenticate.',
+				"error"
+			);
+			return;
+		}
+
+		if (msg.includes("refresh") || msg.includes("refresh_token")) {
+			new Notice("Session expired. Please sign in again.");
+			this.appendSystemMessage(
+				'Session expired and could not be refreshed. Click "Sign out" then "Sign in" to re-authenticate.',
+				"error"
+			);
+			return;
+		}
+
+		// Configuration errors
+		if (msg.includes("No auth token available") || msg.includes("No Claude Max OAuth token")) {
+			new Notice("Not authenticated. Please sign in first.");
+			this.appendSystemMessage(
+				'Not authenticated. Click "Sign in" to authenticate with Claude, or configure an API key in settings.',
+				"error"
+			);
+			return;
+		}
+
+		// Network/timeout errors
+		if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
+			new Notice("Connection timed out. Please try again.");
+			this.appendSystemMessage("Connection timed out. Please check your internet connection and try again.", "error");
+			return;
+		}
+
+		// Rate limiting
+		if (msg.includes("429") || msg.includes("rate limit") || msg.includes("Rate limit")) {
+			new Notice("Rate limited. Please wait a moment.");
+			this.appendSystemMessage("Rate limit hit. Please wait a moment before trying again.", "error");
+			return;
+		}
+
+		// Generic error
+		new Notice(msg);
+		this.appendSystemMessage(`Claude error: ${msg}`, "error");
 	}
 
 	private handleStreamEvent(event: BridgeStreamEvent): void {
@@ -223,8 +247,12 @@ export class ClaudeChatView extends ItemView {
 				return;
 			}
 			case "thinking_delta": {
-				if (!this.streamingThinkingTextEl || !this.thinkingDetailsEl) {
+				if (!this.streamingThinkingTextEl) {
 					this.createThinkingBlock();
+				}
+				// Clear loading placeholder on first thinking delta
+				if (this.thinkingTextBuffer === "" && this.streamingThinkingTextEl) {
+					this.streamingThinkingTextEl.empty();
 				}
 				// Accumulate in memory buffer, NOT DOM
 				this.thinkingTextBuffer += event.text;
@@ -276,6 +304,7 @@ export class ClaudeChatView extends ItemView {
 			// Flush thinking text buffer to DOM
 			if (this.streamingThinkingTextEl && this.thinkingTextBuffer) {
 				this.streamingThinkingTextEl.setText(this.thinkingTextBuffer);
+				this.streamingThinkingTextEl.scrollTop = this.streamingThinkingTextEl.scrollHeight;
 			}
 
 			this.throttledScroll();
@@ -296,6 +325,10 @@ export class ClaudeChatView extends ItemView {
 
 	private beginStreamingAssistantBlocks(): void {
 		if (!this.threadEl) return;
+
+		// Create thinking block first (will show loading placeholder)
+		this.createThinkingBlock(true);
+
 		const assistantBubble = this.threadEl.createDiv({ cls: "claude-chat-bubble claude-chat-bubble--assistant" });
 		assistantBubble.createEl("div", { text: "Claude", cls: "claude-chat-bubble-label" });
 		this.streamingAssistantBubbleEl = assistantBubble;
@@ -331,6 +364,10 @@ export class ClaudeChatView extends ItemView {
 		}
 
 		this.scrollThreadToBottom();
+
+		// Collapse the thinking panel when response is complete
+		this.collapseThinkingPanel();
+
 		this.endStreamingBlocks();
 	}
 
@@ -391,6 +428,8 @@ export class ClaudeChatView extends ItemView {
 		this.streamingAssistantBubbleEl = null;
 		this.streamingAssistantTextEl = null;
 		this.streamingThinkingTextEl = null;
+		this.thinkingPanelEl = null;
+		this.thinkingExpandBtnEl = null;
 		this.thinkingDetailsEl = null;
 		this.streamingToolContainerEl = null;
 		this.toolStepEls.clear();
@@ -404,15 +443,78 @@ export class ClaudeChatView extends ItemView {
 		}
 	}
 
-	private createThinkingBlock(): void {
-		if (!this.threadEl) return;
-		const wrap = this.threadEl.createDiv({ cls: "claude-chat-step claude-chat-step--thinking" });
-		const details = wrap.createEl("details") as HTMLDetailsElement;
-		details.addClass("claude-chat-thinking-details");
-		const summary = details.createEl("summary", { text: "Thinking" });
-		summary.addClass("claude-chat-thinking-summary");
-		this.streamingThinkingTextEl = details.createDiv({ cls: "claude-chat-step-detail" });
-		this.thinkingDetailsEl = details;
+	private createThinkingBlock(isLoading = false): void {
+		if (!this.threadEl || this.streamingThinkingTextEl) return;
+
+		// Insert thinking panel before the assistant bubble if it exists
+		const panel = this.threadEl.createDiv({ cls: "claude-chat-thinking-panel" });
+		panel.style.animation = "slideInUp 0.15s ease-out forwards";
+		if (this.streamingAssistantBubbleEl) {
+			this.threadEl.insertBefore(panel, this.streamingAssistantBubbleEl);
+		}
+
+		// Store references for later collapse
+		this.thinkingPanelEl = panel;
+
+		const header = panel.createDiv({ cls: "claude-chat-thinking-header" });
+		const titleWrap = header.createDiv({ cls: "claude-chat-thinking-title-wrap" });
+		titleWrap.createDiv({ cls: "claude-chat-thinking-status", text: "Thinking..." });
+		titleWrap.createDiv({ cls: "claude-chat-thinking-title", text: "Claude's reasoning" });
+
+		const expandBtn = header.createEl("button", {
+			cls: "claude-chat-thinking-expand-btn clickable-icon",
+			attr: { "aria-label": "Toggle thinking expansion" }
+		});
+		setIcon(expandBtn, "chevron-up");
+		this.thinkingExpandBtnEl = expandBtn;
+
+		const content = panel.createDiv({ cls: "claude-chat-thinking-content" });
+
+		// Show loading placeholder if in loading state
+		if (isLoading) {
+			const loadingEl = content.createDiv({ cls: "claude-chat-thinking-loading" });
+			loadingEl.createSpan({ cls: "claude-chat-thinking-loading-dots", text: "" });
+			loadingEl.createSpan({ text: "Analyzing your request" });
+		}
+
+		this.streamingThinkingTextEl = content;
+
+		// Click handler for expand button
+		expandBtn.addEventListener("click", (evt) => {
+			evt.preventDefault();
+			evt.stopPropagation();
+			this.toggleThinkingPanel();
+		});
+
+		// Click handler for entire header (when collapsed)
+		header.addEventListener("click", (evt) => {
+			// Only handle click if panel is collapsed (don't interfere when expanded)
+			if (panel.classList.contains("is-collapsed")) {
+				evt.preventDefault();
+				evt.stopPropagation();
+				this.toggleThinkingPanel();
+			}
+		});
+
+		this.scrollThreadToBottom();
+	}
+
+	private toggleThinkingPanel(): void {
+		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) return;
+		const isCollapsedNow = this.thinkingPanelEl.classList.contains("is-collapsed");
+		if (isCollapsedNow) {
+			this.thinkingPanelEl.removeClass("is-collapsed");
+			setIcon(this.thinkingExpandBtnEl, "chevron-up");
+		} else {
+			this.thinkingPanelEl.addClass("is-collapsed");
+			setIcon(this.thinkingExpandBtnEl, "chevron-down");
+		}
+	}
+
+	private collapseThinkingPanel(): void {
+		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) return;
+		this.thinkingPanelEl.addClass("is-collapsed");
+		setIcon(this.thinkingExpandBtnEl, "chevron-down");
 	}
 
 	private appendOrUpdateToolStep(
@@ -461,23 +563,27 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	private renderContextChip(): void {
-		if (!this.contextChipEl || !this.helperLineEl) return;
-		const includeContext = this.includeContextToggleEl?.checked ?? false;
-		const scope = this.getSelectedScope();
-		const context = this.plugin.getActiveContext(scope);
+		if (!this.contextChipEl) return;
 
 		this.contextChipEl.empty();
 
-		if (!includeContext) {
-			this.helperLineEl.setText("Context disabled. Claude will only use your typed prompt.");
+		if (!this.contextEnabled) {
+			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--disabled" });
+			chip.createSpan({ text: "Context disabled" });
+			const addBtn = chip.createEl("button", { text: "+", cls: "claude-chat-chip-add" });
+			addBtn.addEventListener("click", () => {
+				this.contextEnabled = true;
+				this.renderContextChip();
+			});
 			this.updateEditButtons();
 			return;
 		}
 
+		const context = this.plugin.getActiveContext();
+
 		if (!context) {
 			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--warning" });
 			chip.setText("No active markdown note");
-			this.helperLineEl.setText("Open a markdown note to attach context.");
 			this.updateEditButtons();
 			return;
 		}
@@ -485,17 +591,17 @@ export class ClaudeChatView extends ItemView {
 		const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip" });
 		chip.createSpan({ text: "Current note" });
 		chip.createSpan({ text: `· ${context.fileName}` });
-		chip.createSpan({ text: `· ${context.scopeUsed === "selection" ? "Selection" : "Whole note"}` });
+		if (context.hasSelection) {
+			chip.createSpan({ text: "· Selection + Full file", cls: "claude-chat-chip-selection" });
+		} else {
+			chip.createSpan({ text: "· Full file" });
+		}
 		const removeBtn = chip.createEl("button", { text: "×", cls: "claude-chat-chip-remove" });
 		removeBtn.addEventListener("click", () => {
-			if (this.includeContextToggleEl) {
-				this.includeContextToggleEl.checked = false;
-			}
+			this.contextEnabled = false;
 			this.renderContextChip();
 		});
 
-		const truncationLabel = context.wasTruncated ? "truncated" : "full";
-		this.helperLineEl.setText(`Attached ${context.content.length} chars (${truncationLabel}) from ${context.filePath}`);
 		this.updateEditButtons();
 	}
 
@@ -562,17 +668,81 @@ export class ClaudeChatView extends ItemView {
 		}
 	}
 
-	private getSelectedScope(): ContextScope {
-		if (this.scopeEl?.value === "note") {
-			return "note";
+	private renderStatus(session: AuthSession): void {
+		if (this.statusEl) {
+			this.statusEl.empty();
+			this.statusEl.setText(this.describeSession(session));
 		}
-		return "selection";
+		this.renderSettingsPanel();
 	}
 
-	private renderStatus(session: AuthSession): void {
-		if (!this.statusEl) return;
-		this.statusEl.empty();
-		this.statusEl.setText(this.describeSession(session));
+	private toggleSettingsPanel(): void {
+		if (!this.settingsPanelEl) return;
+		const isVisible = this.settingsPanelEl.style.display !== "none";
+		this.settingsPanelEl.style.display = isVisible ? "none" : "flex";
+		if (!isVisible) {
+			this.renderSettingsPanel();
+		}
+	}
+
+	private renderSettingsPanel(): void {
+		if (!this.settingsPanelEl) return;
+		const panel = this.settingsPanelEl;
+		panel.empty();
+
+		const session = this.plugin.getChatAuthSession();
+
+		const statusSection = panel.createDiv({ cls: "claude-chat-settings-status" });
+		setIcon(statusSection.createSpan({ cls: "claude-chat-settings-status-icon" }), "info");
+		statusSection.createSpan({ text: this.describeSession(session) });
+
+		const actionsSection = panel.createDiv({ cls: "claude-chat-settings-actions" });
+
+		const loginBtn = actionsSection.createEl("button", { cls: "claude-chat-settings-action-btn" });
+		setIcon(loginBtn.createSpan(), "log-in");
+		loginBtn.createSpan({ text: "Sign in" });
+		loginBtn.addEventListener("click", async () => {
+			try {
+				const session = await this.plugin.startChatLogin();
+				this.renderStatus(session);
+				this.appendSystemMessage(`Auth result: ${this.describeSession(session)}`);
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				new Notice(msg);
+				this.appendSystemMessage(`Sign in failed: ${msg}`, "error");
+			}
+		});
+
+		const testBtn = actionsSection.createEl("button", { cls: "claude-chat-settings-action-btn" });
+		setIcon(testBtn.createSpan(), "activity");
+		testBtn.createSpan({ text: "Test Connection" });
+		testBtn.addEventListener("click", async () => {
+			try {
+				await this.plugin.testChatConnection();
+				this.appendSystemMessage("Connection test succeeded.", "success");
+				this.renderStatus(this.plugin.getChatAuthSession());
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				new Notice(msg);
+				this.appendSystemMessage(`Connection test failed: ${msg}`, "error");
+			}
+		});
+
+		const signOutBtn = actionsSection.createEl("button", { cls: "claude-chat-settings-action-btn" });
+		setIcon(signOutBtn.createSpan(), "log-out");
+		signOutBtn.createSpan({ text: "Sign out" });
+		signOutBtn.addEventListener("click", async () => {
+			const session = await this.plugin.signOutChat();
+			this.renderStatus(session);
+			this.appendSystemMessage("Signed out.");
+		});
+
+		const closeBtn = panel.createEl("button", { cls: "claude-chat-settings-close-btn", text: "Close" });
+		closeBtn.addEventListener("click", () => this.toggleSettingsPanel());
+	}
+
+	private onHeaderMenuClick(evt: MouseEvent): void {
+		// No longer used, handled by toggleSettingsPanel
 	}
 
 	private describeSession(session: AuthSession): string {
