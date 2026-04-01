@@ -4,14 +4,9 @@ import { AuthSession } from "./auth/types";
 import { ClaudeChatClient } from "./chat/ClaudeChatClient";
 import { BridgeStreamEvent, ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
-import { ActiveFileContextService, ContextScope, formatPromptWithActiveContext } from "./editor/ActiveFileContext";
+import { ActiveFileContextService, formatPromptWithActiveContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
 import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
-
-interface SendPromptOptions {
-	includeActiveContext: boolean;
-	scope: ContextScope;
-}
 
 export default class ObsidianAiPlugin extends Plugin {
 	settings: ObsidianAiSettings;
@@ -62,7 +57,8 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async onunload() {
-		await this.app.workspace.detachLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
+		// Don't detach leaves here - let the workspace layout persist across reloads
+		// The views will be reconnected when the plugin reloads
 	}
 
 	private async activateChatView(): Promise<void> {
@@ -82,14 +78,6 @@ export default class ObsidianAiPlugin extends Plugin {
 		return this.authController.getSession();
 	}
 
-	getDefaultContextScope(): ContextScope {
-		return this.settings.defaultContextScope;
-	}
-
-	isActiveContextEnabledByDefault(): boolean {
-		return this.settings.includeActiveNoteContextByDefault;
-	}
-
 	shouldConfirmWholeNoteReplace(): boolean {
 		return this.settings.requireConfirmForWholeNoteReplace;
 	}
@@ -98,10 +86,10 @@ export default class ObsidianAiPlugin extends Plugin {
 		return this.editorChangeApplier.getActiveMarkdownState();
 	}
 
-	getActiveContext(scope: ContextScope) {
+	getActiveContext() {
 		return this.activeFileContextService.getActiveContext({
-			scope,
-			maxChars: this.settings.activeNoteContextMaxChars,
+			maxFullContentChars: this.settings.activeNoteContextMaxFullChars,
+			maxSelectionChars: this.settings.activeNoteContextMaxSelectionChars,
 		});
 	}
 
@@ -141,18 +129,61 @@ export default class ObsidianAiPlugin extends Plugin {
 		new Notice("Connection test succeeded");
 	}
 
-	async sendChatPrompt(prompt: string, options: SendPromptOptions): Promise<string> {
+	/**
+	 * Validate authentication before making API calls.
+	 * Returns validation result with user-friendly message.
+	 */
+	async validateAuth(): Promise<{ valid: boolean; message: string }> {
+		const session = this.authController.getSession();
+
+		if (session.status !== "signed-in") {
+			return {
+				valid: false,
+				message: 'Not authenticated. Click "Sign in" to authenticate with Claude, or configure an API key in settings.'
+			};
+		}
+
+		// Try to get runtime env - this will trigger token refresh if needed
+		try {
+			const runtimeEnv = await this.authController.getRuntimeEnv();
+			if (!runtimeEnv) {
+				return {
+					valid: false,
+					message: 'Authentication failed. Your session may have expired. Click "Sign out" then "Sign in" to re-authenticate.'
+				};
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("refresh") || msg.includes("expired")) {
+				return {
+					valid: false,
+					message: 'Session expired and could not be refreshed. Click "Sign out" then "Sign in" to re-authenticate.'
+				};
+			}
+			return {
+				valid: false,
+				message: `Authentication error: ${msg}. Try signing out and signing in again.`
+			};
+		}
+
+		return { valid: true, message: "" };
+	}
+
+	async sendChatPrompt(prompt: string, options?: { includeActiveContext?: boolean }): Promise<string> {
 		const result = await this.sendChatPromptStream(prompt, options);
 		return result.text;
 	}
 
 	async sendChatPromptStream(
 		prompt: string,
-		options: SendPromptOptions,
+		options?: { includeActiveContext?: boolean },
 		handlers?: { onEvent?: (event: BridgeStreamEvent) => void }
 	): Promise<{ text: string; fileChanged?: boolean; editedFilePath?: string }> {
-		const context = options.includeActiveContext ? this.getActiveContext(options.scope) : null;
+		const includeContext = options?.includeActiveContext !== false; // default to true
+		const context = includeContext ? this.getActiveContext() : null;
 		const finalPrompt = context ? formatPromptWithActiveContext(prompt, context) : prompt;
+		const activeFilePath = context?.filePath;
+
 		const runtimeEnv = await this.authController.getRuntimeEnv();
 		if (!runtimeEnv) {
 			throw new Error("No auth token available. Configure an Anthropic API key or complete Claude Max login.");
@@ -171,10 +202,10 @@ export default class ObsidianAiPlugin extends Plugin {
 			systemPrompt: this.settings.chatSystemPrompt,
 			cwd: vaultBasePath,
 			env: runtimeEnv,
-			activeFilePath: context?.filePath,
+			activeFilePath: activeFilePath,
 		}, handlers);
 		if (result.fileChanged) {
-			const editedPath = result.editedFilePath ?? context?.filePath ?? "active note";
+			const editedPath = result.editedFilePath ?? activeFilePath ?? "active note";
 			return {
 				...result,
 				text: `${result.text}\n\n✅ Updated note: ${editedPath}`,
@@ -202,17 +233,6 @@ export default class ObsidianAiPlugin extends Plugin {
 				leaf.view.refreshActiveContext();
 			}
 		}
-	}
-
-	private buildPrompt(userPrompt: string, options: SendPromptOptions): string {
-		if (!options.includeActiveContext) {
-			return userPrompt;
-		}
-		const context = this.getActiveContext(options.scope);
-		if (!context) {
-			return userPrompt;
-		}
-		return formatPromptWithActiveContext(userPrompt, context);
 	}
 
 	async loadSettings() {

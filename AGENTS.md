@@ -65,17 +65,74 @@ npm run dev
 npm run build
 ```
 
-## Important deployment note
+## Hot reload development setup
 
-This project uses a local `.env` file:
-- `.env`
+For the best development experience, use **Hot-Reload** plugin + symlink setup.
 
-Current target:
-```bash
-OBSIDIAN_PLUGIN_DIR='/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai'
+### Symlink structure
+The plugin folder in the test vault is symlinked to the source project:
+```
+/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
+    → /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
 ```
 
-Because the vault plugin directory is a **symlink to this source project**, build output lands in the source project and is visible to Obsidian through the symlink.
+This means:
+- `npm run dev` builds to `main.js` in the source project
+- Obsidian sees changes immediately through the symlink
+- No file copying needed
+
+### Hot-Reload plugin
+**Install:** [pjeby/hot-reload](https://github.com/pjeby/hot-reload)
+- Watches `main.js`, `styles.css`, `manifest.json` for changes
+- Auto-reloads the plugin ~750ms after changes stop
+- Detects dev plugins by `.git` directory or `.hotreload` file
+
+**Status:** Already installed in test vault at:
+- `/Users/trungluong/clawd/.obsidian/plugins/hot-reload/`
+
+### Dev server in tmux
+Run the dev server in a detached tmux session:
+```bash
+tmux new-session -d -s obsidian-ai-dev "npm run dev"
+```
+
+**Manage session:**
+```bash
+# View output
+tmux attach -t obsidian-ai-dev
+
+# Detach (Ctrl+B, then D)
+
+# Stop server
+tmux kill-session -t obsidian-ai-dev
+```
+
+### Panel persistence fix
+**Problem:** The chat panel would close on every hot reload.
+
+**Solution:** Removed `detachLeavesOfType()` from `onunload()` in `main.ts`:
+```typescript
+async onunload() {
+    // Don't detach leaves here - let the workspace layout persist across reloads
+    // The views will be reconnected when the plugin reloads
+}
+```
+
+Now the chat panel **stays open** when the plugin hot-reloads.
+
+## Important deployment note
+
+This project uses a **symlink-based deployment** for development:
+
+**Symlink:**
+```
+/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
+    → /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+```
+
+Because the vault plugin directory is a **symlink to this source project**, build output lands in the source project and is visible to Obsidian through the symlink. No file copying is performed during development.
+
+**Legacy note:** The `.env` file with `OBSIDIAN_PLUGIN_DIR` is no longer used since we removed the file copy plugin from esbuild. The symlink handles everything.
 
 ## Runtime artifacts expected
 
