@@ -2,7 +2,7 @@ import { Notice, Plugin } from "obsidian";
 import { AuthController } from "./auth/AuthController";
 import { AuthSession } from "./auth/types";
 import { ClaudeChatClient } from "./chat/ClaudeChatClient";
-import { ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
+import { BridgeStreamEvent, ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
 import { ActiveFileContextService, ContextScope, formatPromptWithActiveContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
@@ -142,6 +142,15 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async sendChatPrompt(prompt: string, options: SendPromptOptions): Promise<string> {
+		const result = await this.sendChatPromptStream(prompt, options);
+		return result.text;
+	}
+
+	async sendChatPromptStream(
+		prompt: string,
+		options: SendPromptOptions,
+		handlers?: { onEvent?: (event: BridgeStreamEvent) => void }
+	): Promise<{ text: string; fileChanged?: boolean; editedFilePath?: string }> {
 		const context = options.includeActiveContext ? this.getActiveContext(options.scope) : null;
 		const finalPrompt = context ? formatPromptWithActiveContext(prompt, context) : prompt;
 		const runtimeEnv = await this.authController.getRuntimeEnv();
@@ -156,19 +165,22 @@ export default class ObsidianAiPlugin extends Plugin {
 		if (!vaultBasePath) {
 			throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
 		}
-		const result = await this.sdkBridge.chat({
+		const result = await this.sdkBridge.chatStream({
 			prompt: finalPrompt,
 			model: this.settings.defaultClaudeModel,
 			systemPrompt: this.settings.chatSystemPrompt,
 			cwd: vaultBasePath,
 			env: runtimeEnv,
 			activeFilePath: context?.filePath,
-		});
+		}, handlers);
 		if (result.fileChanged) {
 			const editedPath = result.editedFilePath ?? context?.filePath ?? "active note";
-			return `${result.text}\n\n✅ Updated note: ${editedPath}`;
+			return {
+				...result,
+				text: `${result.text}\n\n✅ Updated note: ${editedPath}`,
+			};
 		}
-		return result.text;
+		return result;
 	}
 
 	replaceSelectionWithAssistantText(content: string) {
