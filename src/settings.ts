@@ -6,10 +6,9 @@ export interface ObsidianAiSettings {
 	anthropicApiKey: string;
 	defaultClaudeModel: string;
 	chatSystemPrompt: string;
-	includeActiveNoteContextByDefault: boolean;
-	defaultContextScope: "selection" | "note";
 	requireConfirmForWholeNoteReplace: boolean;
-	activeNoteContextMaxChars: number;
+	activeNoteContextMaxFullChars: number;
+	activeNoteContextMaxSelectionChars: number;
 	claudeOauthAccessToken: string;
 	claudeOauthRefreshToken: string;
 	claudeOauthExpiresAt: number;
@@ -22,10 +21,9 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	anthropicApiKey: "",
 	defaultClaudeModel: "claude-sonnet-4-5",
 	chatSystemPrompt: "You are a concise assistant helping with Obsidian notes.",
-	includeActiveNoteContextByDefault: true,
-	defaultContextScope: "selection",
 	requireConfirmForWholeNoteReplace: true,
-	activeNoteContextMaxChars: 12000,
+	activeNoteContextMaxFullChars: 12000,
+	activeNoteContextMaxSelectionChars: 4000,
 	claudeOauthAccessToken: "",
 	claudeOauthRefreshToken: "",
 	claudeOauthExpiresAt: 0,
@@ -102,38 +100,30 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName("Include active note context by default")
-			.setDesc("When enabled, the active note (or selection) is included automatically in chat prompts.")
-			.addToggle((toggle) => toggle
-				.setValue(this.plugin.settings.includeActiveNoteContextByDefault)
-				.onChange(async (value) => {
-					this.plugin.settings.includeActiveNoteContextByDefault = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName("Default note context scope")
-			.setDesc("Choose whether chat should prefer active selection or full note context.")
-			.addDropdown((dropdown) => dropdown
-				.addOption("selection", "Selection (fallback to note)")
-				.addOption("note", "Whole note")
-				.setValue(this.plugin.settings.defaultContextScope)
-				.onChange(async (value) => {
-					this.plugin.settings.defaultContextScope = value as "selection" | "note";
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName("Active note context max characters")
-			.setDesc("Maximum characters from active note context to include in each prompt.")
+			.setName("Active note context max full content characters")
+			.setDesc("Maximum characters from full file content to include in each prompt.")
 			.addText((text) => text
 				.setPlaceholder("12000")
-				.setValue(String(this.plugin.settings.activeNoteContextMaxChars))
+				.setValue(String(this.plugin.settings.activeNoteContextMaxFullChars))
 				.onChange(async (value) => {
 					const parsed = Number.parseInt(value, 10);
-					this.plugin.settings.activeNoteContextMaxChars = Number.isFinite(parsed) && parsed > 500
+					this.plugin.settings.activeNoteContextMaxFullChars = Number.isFinite(parsed) && parsed > 500
 						? parsed
 						: 12000;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Active note context max selection characters")
+			.setDesc("Maximum characters from selected text to include in each prompt (when there is a selection).")
+			.addText((text) => text
+				.setPlaceholder("4000")
+				.setValue(String(this.plugin.settings.activeNoteContextMaxSelectionChars))
+				.onChange(async (value) => {
+					const parsed = Number.parseInt(value, 10);
+					this.plugin.settings.activeNoteContextMaxSelectionChars = Number.isFinite(parsed) && parsed > 100
+						? parsed
+						: 4000;
 					await this.plugin.saveSettings();
 				}));
 
