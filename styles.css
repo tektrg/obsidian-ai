@@ -1,3 +1,60 @@
+/* Changes Panel - Shows diff stats inline */
+.claude-chat-changes-panel {
+  display: inline-flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  min-width: 120px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.claude-chat-changes-panel:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border-hover);
+}
+
+.claude-chat-changes-title {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.claude-chat-changes-stats {
+  display: flex;
+  gap: 10px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.claude-chat-changes-added {
+  color: var(--color-green);
+}
+
+.claude-chat-changes-removed {
+  color: var(--text-error);
+}
+
+/* Diff Viewer Modal - Larger size (80% of screen) */
+.claude-diff-modal {
+  width: 80vw;
+  max-width: 1200px;
+}
+
+.claude-diff-modal .modal-content {
+  max-height: 80vh;
+  padding: 0;
+}
+
+.claude-diff-modal .modal-title {
+  display: none;
+}
+
+/* Existing styles below */
 .claude-chat-view {
 	height: 100%;
 	padding: 8px;
@@ -723,4 +780,201 @@
 		transform: scale(1);
 		opacity: 1;
 	}
+}
+
+/* Undo button styling */
+.claude-chat-action-btn--undo {
+	color: var(--text-accent);
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+}
+
+.claude-chat-action-btn--undo:hover {
+	color: var(--text-accent);
+	background: color-mix(in srgb, var(--interactive-accent) 15%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--interactive-accent) 50%, var(--background-modifier-border));
+}
+
+/* Diff Viewer Modal Content */
+.claude-diff-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.claude-diff-title-wrap {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.claude-diff-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.claude-diff-close-btn {
+	background: transparent;
+	border: none;
+	padding: 4px;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: var(--radius-s);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.claude-diff-close-btn:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.claude-diff-close-btn svg {
+	width: 18px;
+	height: 18px;
+}
+
+.claude-diff-info {
+	padding: 12px 20px;
+	background: color-mix(in srgb, var(--background-primary-alt) 50%, transparent);
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.claude-diff-file-path {
+	font-weight: 500;
+	color: var(--text-normal);
+	margin-bottom: 4px;
+}
+
+.claude-diff-action-type {
+	font-size: 12px;
+}
+
+.claude-diff-stats {
+	display: flex;
+	gap: 12px;
+	padding: 10px 20px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.claude-diff-stat {
+	padding: 2px 8px;
+	border-radius: 4px;
+}
+
+.claude-diff-stat--added {
+	color: var(--color-green);
+	background: color-mix(in srgb, var(--color-green) 12%, var(--background-primary));
+}
+
+.claude-diff-stat--removed {
+	color: var(--text-error);
+	background: color-mix(in srgb, var(--text-error) 12%, var(--background-primary));
+}
+
+.claude-diff-stat--unchanged {
+	color: var(--text-muted);
+	background: color-mix(in srgb, var(--background-primary-alt) 50%, transparent);
+}
+
+.claude-diff-content-container {
+	max-height: 60vh;
+	overflow-y: auto;
+	background: var(--background-primary);
+}
+
+.claude-diff-content {
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.claude-diff-empty {
+	padding: 40px 20px;
+	text-align: center;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.claude-diff-line {
+	display: flex;
+	padding: 2px 0;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.claude-diff-line-prefix {
+	flex-shrink: 0;
+	width: 20px;
+	text-align: center;
+	user-select: none;
+	font-weight: 600;
+}
+
+.claude-diff-line-content {
+	flex: 1;
+	padding-left: 8px;
+}
+
+.claude-diff-line-empty {
+	opacity: 0.5;
+}
+
+.claude-diff-line--added {
+	background: color-mix(in srgb, var(--color-green) 10%, transparent);
+}
+
+.claude-diff-line--added .claude-diff-line-prefix {
+	color: var(--color-green);
+}
+
+.claude-diff-line--removed {
+	background: color-mix(in srgb, var(--text-error) 10%, transparent);
+}
+
+.claude-diff-line--removed .claude-diff-line-prefix {
+	color: var(--text-error);
+}
+
+.claude-diff-line--unchanged {
+	background: transparent;
+}
+
+.claude-diff-line--unchanged .claude-diff-line-prefix {
+	color: var(--text-muted);
+}
+
+.claude-diff-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 16px 20px;
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.claude-diff-close-action-btn {
+	padding: 6px 16px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.claude-diff-close-action-btn:hover {
+	background: var(--interactive-accent-hover);
 }
