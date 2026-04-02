@@ -2,6 +2,8 @@ import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, WorkspaceLeaf, se
 import type ObsidianAiPlugin from "../main";
 import type { AuthSession } from "../auth/types";
 import type { BridgeStreamEvent } from "./ClaudeSdkBridge";
+import { DiffViewerModal } from "../components/DiffViewerModal";
+import { generateInlineDiff, getDiffStats } from "../utils/DiffGenerator";
 
 export const CLAUDE_CHAT_VIEW_TYPE = "claude-chat-view";
 
@@ -155,6 +157,10 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 
+		// Clear undo state when sending a new message.
+		// Turn snapshot capture is handled in plugin send flow to keep one source of truth.
+		this.plugin.clearUndoState();
+
 		this.appendUserMessage(prompt);
 		this.promptInputEl.value = "";
 		this.setSendingState(true);
@@ -275,6 +281,10 @@ export class ClaudeChatView extends ItemView {
 					event.ok === false ? "error" : "done",
 					event.detail
 				);
+				// Track if this was an edit tool
+				if (this.isEditTool(event.toolName)) {
+					this.plugin.turnHasEdits = true;
+				}
 				return;
 			}
 			case "status": {
@@ -372,19 +382,96 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	private appendActionBar(container: HTMLElement, text: string): void {
+		// Clear any existing action bar first
+		const existingBar = container.querySelector(".claude-chat-action-bar");
+		if (existingBar) {
+			existingBar.remove();
+		}
+
 		const actionBar = container.createDiv({ cls: "claude-chat-action-bar" });
 
 		const replaceSelBtn = actionBar.createEl("button", { text: "Replace selection", cls: "claude-chat-action-btn" });
 		setIcon(replaceSelBtn, "replace");
-		replaceSelBtn.addEventListener("click", () => this.handleActionReplaceSelection(text));
+		replaceSelBtn.addEventListener("click", () => this.handleActionReplaceSelection(text, actionBar));
 
 		const appendBtn = actionBar.createEl("button", { text: "Append", cls: "claude-chat-action-btn" });
 		setIcon(appendBtn, "plus-square");
-		appendBtn.addEventListener("click", () => this.handleActionAppendToNote(text));
+		appendBtn.addEventListener("click", () => this.handleActionAppendToNote(text, actionBar));
 
 		const replaceNoteBtn = actionBar.createEl("button", { text: "Replace note", cls: "claude-chat-action-btn mod-warning" });
 		setIcon(replaceNoteBtn, "file-warning");
-		replaceNoteBtn.addEventListener("click", () => this.handleActionReplaceWholeNote(text));
+		replaceNoteBtn.addEventListener("click", () => this.handleActionReplaceWholeNote(text, actionBar));
+
+		// Show Changes panel if there are edits (instead of View diff button)
+		if (this.plugin.turnHasEdits && this.plugin.turnSnapshot) {
+			void this.appendChangesPanel(actionBar);
+		}
+	}
+
+	/**
+	 * Append a Changes panel showing diff stats (+X -Y)
+	 */
+	private async appendChangesPanel(actionBar: HTMLElement): Promise<void> {
+		const stats = await this.calculateDiffStats();
+		if (!stats) return;
+
+		const changesPanel = actionBar.createDiv({ cls: "claude-chat-changes-panel" });
+		changesPanel.createSpan({ text: "Changes", cls: "claude-chat-changes-title" });
+		
+		const statsEl = changesPanel.createDiv({ cls: "claude-chat-changes-stats" });
+		if (stats.added > 0) {
+			statsEl.createSpan({ 
+				text: `+${stats.added}`, 
+				cls: "claude-chat-changes-added" 
+			});
+		}
+		if (stats.removed > 0) {
+			statsEl.createSpan({ 
+				text: `-${stats.removed}`, 
+				cls: "claude-chat-changes-removed" 
+			});
+		}
+
+		changesPanel.addEventListener("click", () => {
+			void this.showTurnDiff();
+		});
+	}
+
+	/**
+	 * Calculate diff stats for the current turn
+	 */
+	private async calculateDiffStats(): Promise<{ added: number; removed: number } | null> {
+		try {
+			const snapshot = this.plugin?.turnSnapshot;
+			if (!snapshot || snapshot.files.length === 0) {
+				return null;
+			}
+
+			const firstSnapshotFile = snapshot.files[0];
+			if (!firstSnapshotFile) {
+				return null;
+			}
+
+			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
+			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
+
+			const current = await this.plugin.getCurrentFileContent(original.filePath);
+			if (!current) {
+				return null;
+			}
+
+			// No changes
+			if (current.fullContent === original.fullContent) {
+				return { added: 0, removed: 0 };
+			}
+
+			const diff = generateInlineDiff(original.fullContent, current.fullContent);
+			const stats = getDiffStats(diff);
+			
+			return { added: stats.added, removed: stats.removed };
+		} catch (error) {
+			return null;
+		}
 	}
 
 	/**
@@ -579,9 +666,19 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 
-		const context = this.plugin.getActiveContext();
+		const context = this.plugin.getActiveContextSnapshot();
 
-		if (!context) {
+		if (!context || context.files.length === 0) {
+			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--warning" });
+			chip.setText("No active markdown note");
+			this.updateEditButtons();
+			return;
+		}
+
+		const primary = context.primaryFilePath
+			? context.files.find((f) => f.filePath === context.primaryFilePath) ?? context.files[0]
+			: context.files[0];
+		if (!primary) {
 			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--warning" });
 			chip.setText("No active markdown note");
 			this.updateEditButtons();
@@ -590,8 +687,8 @@ export class ClaudeChatView extends ItemView {
 
 		const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip" });
 		chip.createSpan({ text: "Current note" });
-		chip.createSpan({ text: `· ${context.fileName}` });
-		if (context.hasSelection) {
+		chip.createSpan({ text: `· ${primary.fileName}` });
+		if (primary.hasSelection) {
 			chip.createSpan({ text: "· Selection + Full file", cls: "claude-chat-chip-selection" });
 		} else {
 			chip.createSpan({ text: "· Full file" });
@@ -605,12 +702,18 @@ export class ClaudeChatView extends ItemView {
 		this.updateEditButtons();
 	}
 
-	private handleActionReplaceSelection(text: string): void {
+	private handleActionReplaceSelection(text: string, actionBar: HTMLElement): void {
 		try {
+			// Clear any existing undo state before applying new edit
+			this.plugin.clearUndoState();
+			
 			const result = this.plugin.replaceSelectionWithAssistantText(text);
 			new Notice("Selection replaced from chat response.");
 			this.appendSystemMessage(`Applied edit: replaced selection in ${result.filePath}`, "success");
 			this.renderContextChip();
+			
+			// Replace action bar with undo button
+			this.showUndoButton(actionBar, "replace-selection");
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			new Notice(msg);
@@ -618,12 +721,18 @@ export class ClaudeChatView extends ItemView {
 		}
 	}
 
-	private handleActionAppendToNote(text: string): void {
+	private handleActionAppendToNote(text: string, actionBar: HTMLElement): void {
 		try {
+			// Clear any existing undo state before applying new edit
+			this.plugin.clearUndoState();
+			
 			const result = this.plugin.appendAssistantTextToActiveNote(text);
 			new Notice("Assistant response appended to active note.");
 			this.appendSystemMessage(`Applied edit: appended to ${result.filePath}`, "success");
 			this.renderContextChip();
+			
+			// Replace action bar with undo button
+			this.showUndoButton(actionBar, "append-note");
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			new Notice(msg);
@@ -631,13 +740,19 @@ export class ClaudeChatView extends ItemView {
 		}
 	}
 
-	private handleActionReplaceWholeNote(text: string): void {
+	private handleActionReplaceWholeNote(text: string, actionBar: HTMLElement): void {
 		const applyChange = () => {
 			try {
+				// Clear any existing undo state before applying new edit
+				this.plugin.clearUndoState();
+				
 				const result = this.plugin.replaceWholeActiveNote(text);
 				new Notice("Whole note replaced from chat response.");
 				this.appendSystemMessage(`Applied edit: replaced whole note ${result.filePath}`, "success");
 				this.renderContextChip();
+				
+				// Replace action bar with undo button
+				this.showUndoButton(actionBar, "replace-note");
 			} catch (error) {
 				const msg = error instanceof Error ? error.message : String(error);
 				new Notice(msg);
@@ -650,6 +765,58 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 		applyChange();
+	}
+
+	/**
+	 * Replace action bar with undo button after an edit is applied
+	 */
+	private showUndoButton(actionBar: HTMLElement, actionType: string): void {
+		actionBar.empty();
+
+		const undoBtn = actionBar.createEl("button", { 
+			text: "Undo", 
+			cls: "claude-chat-action-btn claude-chat-action-btn--undo" 
+		});
+		setIcon(undoBtn, "undo");
+		undoBtn.addEventListener("click", () => this.handleActionUndo(actionBar, actionType));
+
+		// Also add View diff button using turn snapshot
+		if (this.plugin.turnSnapshot) {
+			const viewDiffBtn = actionBar.createEl("button", { 
+				text: "View diff", 
+				cls: "claude-chat-action-btn" 
+			});
+			setIcon(viewDiffBtn, "git-compare");
+			viewDiffBtn.addEventListener("click", () => void this.showTurnDiff());
+		}
+	}
+
+	/**
+	 * Handle undo action
+	 */
+	private handleActionUndo(actionBar: HTMLElement, originalActionType: string): void {
+		try {
+			const result = this.plugin.undoLastEdit();
+			new Notice("Edit undone.");
+			this.appendSystemMessage(`Undid ${result.action} in ${result.filePath}`, "success");
+			this.renderContextChip();
+			
+			// Restore original action bar (with edit buttons)
+			// Find the bubble container and re-create the action bar
+			const bubble = actionBar.closest(".claude-chat-bubble--assistant");
+			if (bubble) {
+				actionBar.remove();
+				// We need to get the original text to recreate the action bar
+				// The text is stored in lastAssistantText
+				if (this.lastAssistantText) {
+					this.appendActionBar(bubble as HTMLElement, this.lastAssistantText);
+				}
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			new Notice(`Undo failed: ${msg}`);
+			this.appendSystemMessage(`Undo failed: ${msg}`, "error");
+		}
 	}
 
 	private updateEditButtons(): void {
@@ -756,5 +923,57 @@ export class ClaudeChatView extends ItemView {
 			return "Auth pending. Paste callback URL/code in settings, then click Sign in again.";
 		}
 		return "Signed out.";
+	}
+
+	/**
+	 * Check if a tool name is an edit tool
+	 */
+	private isEditTool(toolName: string): boolean {
+		const editTools = ['write_file', 'edit_file', 'replace', 'append', 'apply_edit', 'str_replace_editor', 'edit'];
+		return editTools.some(t => toolName.toLowerCase().includes(t));
+	}
+
+	/**
+	 * Show diff comparing turn snapshot to current file state
+	 */
+	private async showTurnDiff(): Promise<void> {
+		try {
+			const snapshot = this.plugin?.turnSnapshot;
+			if (!snapshot || snapshot.files.length === 0) {
+				new Notice("No diff available.");
+				return;
+			}
+
+			const firstSnapshotFile = snapshot.files[0];
+			if (!firstSnapshotFile) {
+				new Notice("No diff available.");
+				return;
+			}
+
+			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
+			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
+
+			const current = await this.plugin.getCurrentFileContent(original.filePath);
+			if (!current) {
+				new Notice("Cannot access file content.");
+				return;
+			}
+
+			// Don't show diff if nothing changed
+			if (current.fullContent === original.fullContent) {
+				new Notice("No changes to show.");
+				return;
+			}
+
+			new DiffViewerModal(this.app, {
+				originalContent: original.fullContent,
+				modifiedContent: current.fullContent,
+				actionType: "replace-note",
+				filePath: original.filePath,
+			}).open();
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			new Notice(`Cannot show diff: ${msg}`);
+		}
 	}
 }
