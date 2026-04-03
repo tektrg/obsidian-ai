@@ -48,3 +48,14 @@ export function resolveMarkdownView(app: App): MarkdownView | null {
 
 	return null;
 }
+
+export function resolveMarkdownViewForFile(app: App, filePath: string): MarkdownView | null {
+	const markdownLeaves = app.workspace.getLeavesOfType("markdown");
+	for (const leaf of markdownLeaves) {
+		const view = resolveMarkdownViewFromLeaf(leaf);
+		if (view?.file?.path === filePath) {
+			return view;
+		}
+	}
+	return null;
+}
