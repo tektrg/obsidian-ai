@@ -1,4 +1,4 @@
-import { App, Modal, setIcon } from "obsidian";
+import { App, Modal } from "obsidian";
 import { generateInlineDiff, getDiffStats, type DiffLine } from "../utils/DiffGenerator";
 
 export interface DiffViewerOptions {
@@ -19,7 +19,7 @@ export class DiffViewerModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.addClass("claude-diff-modal");
+    this.modalEl.addClass("claude-diff-modal");
 
     // Header
     const headerEl = contentEl.createDiv({ cls: "claude-diff-header" });
@@ -27,14 +27,6 @@ export class DiffViewerModal extends Modal {
     
     const titleText = this.getActionTitle();
     titleWrap.createEl("h3", { text: titleText, cls: "claude-diff-title" });
-    
-    // Close button
-    const closeBtn = headerEl.createEl("button", {
-      cls: "claude-diff-close-btn clickable-icon",
-      attr: { "aria-label": "Close" }
-    });
-    setIcon(closeBtn, "x");
-    closeBtn.addEventListener("click", () => this.close());
 
     // File info
     const infoEl = contentEl.createDiv({ cls: "claude-diff-info" });
@@ -86,13 +78,7 @@ export class DiffViewerModal extends Modal {
       }
     }
 
-    // Footer actions
-    const actionsEl = contentEl.createDiv({ cls: "claude-diff-actions" });
-    const closeActionBtn = actionsEl.createEl("button", { 
-      text: "Close",
-      cls: "claude-diff-close-action-btn"
-    });
-    closeActionBtn.addEventListener("click", () => this.close());
+
   }
 
   private renderDiffLine(container: HTMLElement, line: DiffLine): void {
@@ -107,10 +93,10 @@ export class DiffViewerModal extends Modal {
       cls: "claude-diff-line-prefix" 
     });
     
-    // Line content
+    // Line content (wrapped)
     const contentSpan = lineEl.createSpan({ 
       text: line.content,
-      cls: "claude-diff-line-content" 
+      cls: "claude-diff-line-content claude-diff-line-content--wrapped" 
     });
     
     // Handle empty lines
