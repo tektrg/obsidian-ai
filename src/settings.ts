@@ -7,8 +7,6 @@ export interface ObsidianAiSettings {
 	defaultClaudeModel: string;
 	chatSystemPrompt: string;
 	requireConfirmForWholeNoteReplace: boolean;
-	activeNoteContextMaxFullChars: number;
-	activeNoteContextMaxSelectionChars: number;
 	claudeOauthAccessToken: string;
 	claudeOauthRefreshToken: string;
 	claudeOauthExpiresAt: number;
@@ -22,8 +20,6 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	defaultClaudeModel: "claude-sonnet-4-5",
 	chatSystemPrompt: "You are a concise assistant helping with Obsidian notes.",
 	requireConfirmForWholeNoteReplace: true,
-	activeNoteContextMaxFullChars: 12000,
-	activeNoteContextMaxSelectionChars: 4000,
 	claudeOauthAccessToken: "",
 	claudeOauthRefreshToken: "",
 	claudeOauthExpiresAt: 0,
@@ -99,33 +95,6 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
-			.setName("Active note context max full content characters")
-			.setDesc("Maximum characters from full file content to include in each prompt.")
-			.addText((text) => text
-				.setPlaceholder("12000")
-				.setValue(String(this.plugin.settings.activeNoteContextMaxFullChars))
-				.onChange(async (value) => {
-					const parsed = Number.parseInt(value, 10);
-					this.plugin.settings.activeNoteContextMaxFullChars = Number.isFinite(parsed) && parsed > 500
-						? parsed
-						: 12000;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName("Active note context max selection characters")
-			.setDesc("Maximum characters from selected text to include in each prompt (when there is a selection).")
-			.addText((text) => text
-				.setPlaceholder("4000")
-				.setValue(String(this.plugin.settings.activeNoteContextMaxSelectionChars))
-				.onChange(async (value) => {
-					const parsed = Number.parseInt(value, 10);
-					this.plugin.settings.activeNoteContextMaxSelectionChars = Number.isFinite(parsed) && parsed > 100
-						? parsed
-						: 4000;
-					await this.plugin.saveSettings();
-				}));
 
 		new Setting(containerEl)
 			.setName("Confirm before replacing whole note")

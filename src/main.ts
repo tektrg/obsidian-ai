@@ -1,25 +1,26 @@
 import { Notice, Plugin } from "obsidian";
 import { AuthController } from "./auth/AuthController";
 import { AuthSession } from "./auth/types";
-import { ClaudeChatClient } from "./chat/ClaudeChatClient";
 import { BridgeStreamEvent, ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
-import { ActiveFileContextService, formatPromptWithActiveContext } from "./editor/ActiveFileContext";
+import { ActiveFileContextService, PromptContextSnapshot, formatPromptWithContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
 import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
 
 export default class ObsidianAiPlugin extends Plugin {
 	settings: ObsidianAiSettings;
 	private authController!: AuthController;
-	private chatClient!: ClaudeChatClient;
 	private sdkBridge!: ClaudeSdkBridge;
 	private activeFileContextService!: ActiveFileContextService;
 	private editorChangeApplier!: EditorChangeApplier;
 
+	// Turn-based diff tracking (at plugin level to survive view reloads)
+	turnSnapshot: PromptContextSnapshot | null = null;
+	turnHasEdits = false;
+
 	async onload() {
 		await this.loadSettings();
 		this.authController = new AuthController(this.settings);
-		this.chatClient = new ClaudeChatClient();
 		this.sdkBridge = new ClaudeSdkBridge(this);
 		this.activeFileContextService = new ActiveFileContextService(this.app);
 		this.editorChangeApplier = new EditorChangeApplier(this.app);
@@ -51,6 +52,20 @@ export default class ObsidianAiPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: "claude-chat-new-conversation",
+			name: "Claude chat: New conversation",
+			callback: () => {
+				const leaves = this.app.workspace.getLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
+				for (const leaf of leaves) {
+					if (leaf.view instanceof ClaudeChatView) {
+						leaf.view.clearConversation();
+					}
+				}
+				new Notice("New conversation started");
+			}
+		});
+
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshChatViewsActiveContext()));
 		this.registerEvent(this.app.workspace.on("file-open", () => this.refreshChatViewsActiveContext()));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshChatViewsActiveContext()));
@@ -78,19 +93,12 @@ export default class ObsidianAiPlugin extends Plugin {
 		return this.authController.getSession();
 	}
 
-	shouldConfirmWholeNoteReplace(): boolean {
-		return this.settings.requireConfirmForWholeNoteReplace;
-	}
-
 	getActiveMarkdownState(): { hasActiveMarkdown: boolean; filePath?: string; hasSelection: boolean } {
 		return this.editorChangeApplier.getActiveMarkdownState();
 	}
 
-	getActiveContext() {
-		return this.activeFileContextService.getActiveContext({
-			maxFullContentChars: this.settings.activeNoteContextMaxFullChars,
-			maxSelectionChars: this.settings.activeNoteContextMaxSelectionChars,
-		});
+	getActiveContextSnapshot() {
+		return this.activeFileContextService.captureContextSnapshot();
 	}
 
 	async startChatLogin(): Promise<AuthSession> {
@@ -154,15 +162,28 @@ export default class ObsidianAiPlugin extends Plugin {
 			}
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			if (msg.includes("refresh") || msg.includes("expired")) {
+			const normalized = msg.toLowerCase();
+			if (normalized.includes("revoked") || normalized.includes("invalid_grant") || normalized.includes("invalid refresh")) {
+				return {
+					valid: false,
+					message: 'Your Claude session was revoked or invalid. Click "Sign in" to re-authenticate.'
+				};
+			}
+			if (normalized.includes("refresh") || normalized.includes("expired")) {
 				return {
 					valid: false,
 					message: 'Session expired and could not be refreshed. Click "Sign out" then "Sign in" to re-authenticate.'
 				};
 			}
+			if (normalized.includes("network") || normalized.includes("timeout") || normalized.includes("fetch")) {
+				return {
+					valid: false,
+					message: 'Temporary network error while validating authentication. Please try again.'
+				};
+			}
 			return {
 				valid: false,
-				message: `Authentication error: ${msg}. Try signing out and signing in again.`
+				message: `Authentication error: ${msg}. Try signing in again.`
 			};
 		}
 
@@ -180,9 +201,16 @@ export default class ObsidianAiPlugin extends Plugin {
 		handlers?: { onEvent?: (event: BridgeStreamEvent) => void }
 	): Promise<{ text: string; fileChanged?: boolean; editedFilePath?: string }> {
 		const includeContext = options?.includeActiveContext !== false; // default to true
-		const context = includeContext ? this.getActiveContext() : null;
-		const finalPrompt = context ? formatPromptWithActiveContext(prompt, context) : prompt;
-		const activeFilePath = context?.filePath;
+
+		// Clear and capture canonical turn snapshot before prompt send
+		this.clearTurnSnapshot();
+		const contextSnapshot = includeContext ? this.getActiveContextSnapshot() : null;
+		if (contextSnapshot) {
+			this.saveTurnSnapshot(contextSnapshot);
+		}
+
+		const finalPrompt = contextSnapshot ? formatPromptWithContext(prompt, contextSnapshot) : prompt;
+		const activeFilePath = contextSnapshot?.primaryFilePath;
 
 		const runtimeEnv = await this.authController.getRuntimeEnv();
 		if (!runtimeEnv) {
@@ -214,16 +242,34 @@ export default class ObsidianAiPlugin extends Plugin {
 		return result;
 	}
 
-	replaceSelectionWithAssistantText(content: string) {
-		return this.editorChangeApplier.replaceSelection(content);
+	/**
+	 * Save turn snapshot for diff comparison
+	 */
+	saveTurnSnapshot(snapshot: PromptContextSnapshot): void {
+		this.turnSnapshot = snapshot;
 	}
 
-	appendAssistantTextToActiveNote(content: string) {
-		return this.editorChangeApplier.appendToNote(content);
+	/**
+	 * Clear turn snapshot
+	 */
+	clearTurnSnapshot(): void {
+		this.turnSnapshot = null;
+		this.turnHasEdits = false;
 	}
 
-	replaceWholeActiveNote(content: string) {
-		return this.editorChangeApplier.replaceWholeNote(content);
+	/**
+	 * Stop the active generation if any.
+	 * Returns true if a generation was stopped.
+	 */
+	stopGeneration(): boolean {
+		return this.sdkBridge.stop();
+	}
+
+	/**
+	 * Get current content for a file path using editor-first, vault-fallback strategy.
+	 */
+	async getCurrentFileContent(filePath: string) {
+		return this.activeFileContextService.getCurrentFileContent(filePath);
 	}
 
 	private refreshChatViewsActiveContext(): void {

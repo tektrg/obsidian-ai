@@ -1,23 +1,19 @@
-import { App } from "obsidian";
-import { resolveMarkdownView } from "./MarkdownViewResolver";
+import { App, TFile } from "obsidian";
+import { resolveMarkdownView, resolveMarkdownViewForFile } from "./MarkdownViewResolver";
 
-export interface ActiveFileContextSnapshot {
+export interface ContextFileSnapshot {
 	filePath: string;
 	fileName: string;
+	source: "editor" | "vault";
 	hasSelection: boolean;
 	fullContent: string;
 	selectionContent: string;
-	fullContentTruncated: boolean;
-	selectionContentTruncated: boolean;
 }
 
-interface GetActiveContextOptions {
-	maxFullContentChars?: number;
-	maxSelectionChars?: number;
+export interface PromptContextSnapshot {
+	files: ContextFileSnapshot[];
+	primaryFilePath?: string;
 }
-
-const DEFAULT_MAX_FULL_CHARS = 12000;
-const DEFAULT_MAX_SELECTION_CHARS = 4000;
 
 export class ActiveFileContextService {
 	private app: App;
@@ -26,14 +22,40 @@ export class ActiveFileContextService {
 		this.app = app;
 	}
 
-	getActiveContext(options: GetActiveContextOptions = {}): ActiveFileContextSnapshot | null {
-		const view = resolveMarkdownView(this.app);
-		if (!view) {
+	async getCurrentFileContent(filePath: string): Promise<ContextFileSnapshot | null> {
+		const editorView = resolveMarkdownViewForFile(this.app, filePath);
+		if (editorView?.file) {
+			const selectionText = editorView.editor.getSelection();
+			const hasSelection = selectionText.trim().length > 0;
+			return {
+				filePath: editorView.file.path,
+				fileName: editorView.file.basename,
+				source: "editor",
+				hasSelection,
+				fullContent: editorView.editor.getValue(),
+				selectionContent: hasSelection ? selectionText : "",
+			};
+		}
+
+		const abstractFile = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(abstractFile instanceof TFile)) {
 			return null;
 		}
 
-		const file = view.file;
-		if (!file) {
+		const fileContent = await this.app.vault.cachedRead(abstractFile);
+		return {
+			filePath: abstractFile.path,
+			fileName: abstractFile.basename,
+			source: "vault",
+			hasSelection: false,
+			fullContent: fileContent,
+			selectionContent: "",
+		};
+	}
+
+	captureContextSnapshot(): PromptContextSnapshot | null {
+		const view = resolveMarkdownView(this.app);
+		if (!view || !view.file) {
 			return null;
 		}
 
@@ -42,54 +64,51 @@ export class ActiveFileContextService {
 		const hasSelection = selectionText.trim().length > 0;
 		const fullContent = editor.getValue();
 
-		const maxFullChars = options.maxFullContentChars ?? DEFAULT_MAX_FULL_CHARS;
-		const maxSelectionChars = options.maxSelectionChars ?? DEFAULT_MAX_SELECTION_CHARS;
-
-		const fullTruncated = truncateText(fullContent, maxFullChars);
-		const selectionTruncated = hasSelection
-			? truncateText(selectionText, maxSelectionChars)
-			: { text: "", wasTruncated: false };
+		const fileSnapshot: ContextFileSnapshot = {
+			filePath: view.file.path,
+			fileName: view.file.basename,
+			source: "editor",
+			hasSelection,
+			fullContent,
+			selectionContent: hasSelection ? selectionText : "",
+		};
 
 		return {
-			filePath: file.path,
-			fileName: file.basename,
-			hasSelection,
-			fullContent: fullTruncated.text,
-			selectionContent: selectionTruncated.text,
-			fullContentTruncated: fullTruncated.wasTruncated,
-			selectionContentTruncated: selectionTruncated.wasTruncated,
+			files: [fileSnapshot],
+			primaryFilePath: fileSnapshot.filePath,
 		};
 	}
 }
 
-export function formatPromptWithActiveContext(
+export function formatPromptWithContext(
 	userPrompt: string,
-	context: ActiveFileContextSnapshot
+	context: PromptContextSnapshot
 ): string {
-	const fullTruncationNote = context.fullContentTruncated
-		? ` (truncated from original length)`
-		: "";
-	const selectionTruncationNote = context.selectionContentTruncated
-		? ` (truncated from original length)`
-		: "";
+	const primary = context.primaryFilePath
+		? context.files.find((f) => f.filePath === context.primaryFilePath) ?? context.files[0]
+		: context.files[0];
+
+	if (!primary) {
+		return userPrompt;
+	}
 
 	const lines: string[] = [
 		"You are helping with an Obsidian note.",
 		"",
 		"ACTIVE_FILE_CONTEXT_START",
-		`File path: ${context.filePath}`,
-		`File name: ${context.fileName}`,
-		`Has selection: ${context.hasSelection ? "yes" : "no"}`,
+		`File path: ${primary.filePath}`,
+		`File name: ${primary.fileName}`,
+		`Has selection: ${primary.hasSelection ? "yes" : "no"}`,
 		"",
 		"Full file content:",
-		context.fullContent + fullTruncationNote,
+		primary.fullContent,
 	];
 
-	if (context.hasSelection) {
+	if (primary.hasSelection) {
 		lines.push(
 			"",
 			"Selected text:",
-			context.selectionContent + selectionTruncationNote
+			primary.selectionContent
 		);
 	}
 
@@ -101,14 +120,4 @@ export function formatPromptWithActiveContext(
 	);
 
 	return lines.join("\n");
-}
-
-function truncateText(text: string, maxChars: number): { text: string; wasTruncated: boolean } {
-	if (text.length <= maxChars) {
-		return { text, wasTruncated: false };
-	}
-	return {
-		text: text.slice(0, maxChars),
-		wasTruncated: true,
-	};
 }
