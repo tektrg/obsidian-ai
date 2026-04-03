@@ -45,9 +45,26 @@ const REQUEST_TIMEOUT_MS = 120000;
 export class ClaudeSdkBridge {
 	private plugin: Plugin;
 	private seq = 0;
+	private activeProcess: {
+		kill: () => void;
+		reqId: string;
+	} | null = null;
 
 	constructor(plugin: Plugin) {
 		this.plugin = plugin;
+	}
+
+	/**
+	 * Stop the active generation if any.
+	 * Returns true if a process was killed, false if no active generation.
+	 */
+	stop(): boolean {
+		if (this.activeProcess) {
+			console.log(`[ClaudeSdkBridge] Stopping request ${this.activeProcess.reqId}`);
+			this.activeProcess.kill();
+			return true;
+		}
+		return false;
 	}
 
 	async ping(env: Record<string, string>): Promise<void> {
@@ -157,16 +174,30 @@ export class ClaudeSdkBridge {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 
+		// Store reference for potential cancellation
+		this.activeProcess = {
+			kill: () => spawned.kill(),
+			reqId,
+		};
+
 		return await new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
 			let stdoutBuffer = "";
 			let stderr = "";
 			let settled = false;
+			let killed = false;
 			let finalResult: Record<string, unknown> | undefined;
+
+			const cleanup = () => {
+				if (this.activeProcess?.reqId === reqId) {
+					this.activeProcess = null;
+				}
+			};
 
 			const timeout = window.setTimeout(() => {
 				if (settled) return;
 				settled = true;
 				spawned.kill();
+				cleanup();
 				reject(new Error(`Claude bridge timeout after ${REQUEST_TIMEOUT_MS}ms`));
 			}, REQUEST_TIMEOUT_MS);
 
@@ -206,6 +237,7 @@ export class ClaudeSdkBridge {
 							settled = true;
 							window.clearTimeout(timeout);
 							spawned.kill();
+							cleanup();
 							reject(error instanceof Error ? error : new Error(String(error)));
 						}
 						return;
@@ -222,13 +254,22 @@ export class ClaudeSdkBridge {
 				if (settled) return;
 				settled = true;
 				window.clearTimeout(timeout);
+				cleanup();
 				reject(err);
 			});
 
-			spawned.on("close", () => {
+			spawned.on("close", (code: number | null) => {
 				if (settled) return;
 				settled = true;
 				window.clearTimeout(timeout);
+				cleanup();
+
+				// Check if process was killed (user cancelled)
+				if (code === null || code === 143 || code === 1) {
+					// Code null = killed by signal, 143 = SIGTERM (128 + 15), 1 = general error after kill
+					reject(new Error("GENERATION_CANCELLED"));
+					return;
+				}
 
 				if (stdoutBuffer.trim()) {
 					try {
