@@ -1,38 +1,12 @@
-import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ObsidianAiPlugin from "../main";
 import type { AuthSession } from "../auth/types";
 import type { BridgeStreamEvent } from "./ClaudeSdkBridge";
 import { DiffViewerModal } from "../components/DiffViewerModal";
 import { generateInlineDiff, getDiffStats } from "../utils/DiffGenerator";
+import { IncrementalDomRenderer } from "incremark-renderer";
 
 export const CLAUDE_CHAT_VIEW_TYPE = "claude-chat-view";
-
-class ConfirmReplaceModal extends Modal {
-	private readonly onConfirm: () => void;
-
-	constructor(app: App, onConfirm: () => void) {
-		super(app);
-		this.onConfirm = onConfirm;
-	}
-
-	onOpen(): void {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.createEl("h3", { text: "Replace whole note?" });
-		contentEl.createEl("p", { text: "This will replace all content in the active note with the latest assistant response." });
-
-		const actions = contentEl.createDiv({ cls: "claude-chat-confirm-actions" });
-		const cancelBtn = actions.createEl("button", { text: "Cancel" });
-		cancelBtn.addEventListener("click", () => this.close());
-
-		const confirmBtn = actions.createEl("button", { text: "Replace note" });
-		confirmBtn.addClass("mod-warning");
-		confirmBtn.addEventListener("click", () => {
-			this.onConfirm();
-			this.close();
-		});
-	}
-}
 
 export class ClaudeChatView extends ItemView {
 	private plugin: ObsidianAiPlugin;
@@ -52,14 +26,19 @@ export class ClaudeChatView extends ItemView {
 	private thinkingDetailsEl: HTMLDetailsElement | null = null;
 	private streamingToolContainerEl: HTMLElement | null = null;
 	private toolStepEls = new Map<string, HTMLElement>();
+	private thinkingLoadingEl: HTMLElement | null = null;
 	private isSending = false;
-	private lastAssistantText = "";
+	private isStreaming = false;
 
 	// Streaming buffers - accumulate in memory, not DOM (prevents layout thrashing)
 	private assistantTextBuffer = "";
 	private thinkingTextBuffer = "";
 	private pendingAnimationFrame: number | null = null;
 	private lastScrollTime = 0;
+
+	// Incremental markdown renderer for streaming content
+	private incrementalRenderer: IncrementalDomRenderer | null = null;
+	private thinkingIncrementalRenderer: IncrementalDomRenderer | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsidianAiPlugin) {
 		super(leaf);
@@ -84,7 +63,6 @@ export class ClaudeChatView extends ItemView {
 
 	refreshActiveContext(): void {
 		this.renderContextChip();
-		this.updateEditButtons();
 	}
 
 	private render(): void {
@@ -101,6 +79,15 @@ export class ClaudeChatView extends ItemView {
 		this.renderStatus(this.plugin.getChatAuthSession());
 
 		const headerActionsEl = headerEl.createDiv({ cls: "claude-chat-header-actions" });
+
+		// New chat button
+		const newChatBtn = headerActionsEl.createEl("button", {
+			cls: "clickable-icon claude-chat-icon-btn claude-chat-new-chat-btn",
+			attr: { "aria-label": "New chat" }
+		});
+		setIcon(newChatBtn, "plus");
+		newChatBtn.addEventListener("click", () => this.clearConversation());
+
 		const menuBtn = headerActionsEl.createEl("button", {
 			cls: "clickable-icon claude-chat-icon-btn claude-chat-burger-btn",
 			attr: { "aria-label": "Menu" }
@@ -128,6 +115,9 @@ export class ClaudeChatView extends ItemView {
 		const promptContainer = composerEl.createDiv({ cls: "claude-chat-prompt-container" });
 		this.promptInputEl = promptContainer.createEl("textarea", { cls: "claude-chat-prompt" });
 		this.promptInputEl.placeholder = "Ask Claude to improve, summarize, or edit your current note...";
+		this.promptInputEl.rows = 1;
+		this.adjustTextareaHeight();
+		this.promptInputEl.addEventListener("input", () => this.adjustTextareaHeight());
 		this.promptInputEl.addEventListener("keydown", (evt) => {
 			if (evt.key === "Enter" && !evt.shiftKey) {
 				evt.preventDefault();
@@ -137,9 +127,31 @@ export class ClaudeChatView extends ItemView {
 
 		this.sendBtn = promptContainer.createEl("button", { cls: "claude-chat-send-btn clickable-icon", attr: { "aria-label": "Send" } });
 		setIcon(this.sendBtn, "send");
-		this.sendBtn.addEventListener("click", () => void this.handleSend());
+		this.sendBtn.addEventListener("click", () => {
+			if (this.isStreaming) {
+				void this.handleStop();
+			} else {
+				void this.handleSend();
+			}
+		});
+	}
 
-		this.updateEditButtons();
+	private adjustTextareaHeight(): void {
+		if (!this.promptInputEl) return;
+		// Reset height to auto to shrink if text is deleted
+		this.promptInputEl.style.height = "auto";
+		// Set to scrollHeight to expand to fit content (capped by max-height in CSS)
+		const newHeight = Math.min(this.promptInputEl.scrollHeight, 220);
+		this.promptInputEl.style.height = `${newHeight}px`;
+	}
+
+	private async handleStop(): Promise<void> {
+		if (!this.isStreaming) return;
+		const stopped = this.plugin.stopGeneration();
+		if (stopped) {
+			// The error handler in handleSend will catch the cancellation and update UI
+			console.log("[ClaudeChat] Stop requested");
+		}
 	}
 
 	private async handleSend(): Promise<void> {
@@ -157,30 +169,37 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 
-		// Clear undo state when sending a new message.
-		// Turn snapshot capture is handled in plugin send flow to keep one source of truth.
-		this.plugin.clearUndoState();
-
 		this.appendUserMessage(prompt);
 		this.promptInputEl.value = "";
-		this.setSendingState(true);
+		this.adjustTextareaHeight();
+		this.setSendingState(true, false);
 		this.beginStreamingAssistantBlocks();
 
 		try {
 			const response = await this.plugin.sendChatPromptStream(prompt, {
 				includeActiveContext: this.contextEnabled,
 			}, {
-				onEvent: (event) => this.handleStreamEvent(event),
+				onEvent: (event) => {
+					// Set streaming state on first event
+					if (!this.isStreaming) {
+						this.setSendingState(true, true);
+					}
+					this.handleStreamEvent(event);
+				},
 			});
-			this.lastAssistantText = response.text;
 			this.finishStreamingAssistantText(response.text);
-			this.updateEditButtons();
 			this.renderContextChip();
 		} catch (error) {
-			this.handleAuthError(error);
-			this.endStreamingBlocks();
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg === "GENERATION_CANCELLED") {
+				this.appendSystemMessage("Generation stopped.");
+				this.endStreamingBlocks();
+			} else {
+				this.handleAuthError(error);
+				this.endStreamingBlocks();
+			}
 		} finally {
-			this.setSendingState(false);
+			this.setSendingState(false, false);
 		}
 	}
 
@@ -196,6 +215,15 @@ export class ClaudeChatView extends ItemView {
 			new Notice("Authentication failed. Please sign in again.");
 			this.appendSystemMessage(
 				'Authentication failed. Your session has expired or been revoked. Click "Sign out" then "Sign in" to re-authenticate.',
+				"error"
+			);
+			return;
+		}
+
+		if (msg.includes("invalid_grant") || msg.includes("revoked") || msg.includes("invalid refresh")) {
+			new Notice("Session revoked. Please sign in again.");
+			this.appendSystemMessage(
+				'Your Claude session was revoked or invalid. Click "Sign in" to re-authenticate.',
 				"error"
 			);
 			return;
@@ -244,25 +272,32 @@ export class ClaudeChatView extends ItemView {
 
 		switch (event.type) {
 			case "assistant_delta": {
-				if (!this.streamingAssistantTextEl) {
+				if (!this.streamingAssistantBubbleEl) {
 					this.beginStreamingAssistantBlocks();
 				}
-				// Accumulate in memory buffer, NOT DOM (prevents layout thrashing)
+				// Use incremark for incremental markdown rendering
 				this.assistantTextBuffer += event.text;
-				this.scheduleUpdate();
+				if (this.incrementalRenderer) {
+					this.incrementalRenderer.append(event.text);
+				}
+				this.throttledScroll();
 				return;
 			}
 			case "thinking_delta": {
-				if (!this.streamingThinkingTextEl) {
+				if (!this.thinkingPanelEl) {
 					this.createThinkingBlock();
 				}
-				// Clear loading placeholder on first thinking delta
-				if (this.thinkingTextBuffer === "" && this.streamingThinkingTextEl) {
-					this.streamingThinkingTextEl.empty();
+				// Hide loading placeholder when thinking text starts streaming
+				if (this.thinkingLoadingEl) {
+					this.thinkingLoadingEl.style.display = "none";
+					this.thinkingLoadingEl = null;
 				}
-				// Accumulate in memory buffer, NOT DOM
+				// Use incremark for incremental markdown rendering in thinking panel
 				this.thinkingTextBuffer += event.text;
-				this.scheduleUpdate();
+				if (this.thinkingIncrementalRenderer) {
+					this.thinkingIncrementalRenderer.append(event.text);
+				}
+				this.throttledScroll();
 				return;
 			}
 			case "tool_started": {
@@ -297,31 +332,6 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	/**
-	 * Schedule a batched DOM update using requestAnimationFrame.
-	 * This prevents layout thrashing by batching multiple tokens into a single render.
-	 */
-	private scheduleUpdate(): void {
-		if (this.pendingAnimationFrame) return; // Already scheduled
-
-		this.pendingAnimationFrame = window.requestAnimationFrame(() => {
-			this.pendingAnimationFrame = null;
-
-			// Flush assistant text buffer to DOM
-			if (this.streamingAssistantTextEl && this.assistantTextBuffer) {
-				this.streamingAssistantTextEl.setText(this.assistantTextBuffer);
-			}
-
-			// Flush thinking text buffer to DOM
-			if (this.streamingThinkingTextEl && this.thinkingTextBuffer) {
-				this.streamingThinkingTextEl.setText(this.thinkingTextBuffer);
-				this.streamingThinkingTextEl.scrollTop = this.streamingThinkingTextEl.scrollHeight;
-			}
-
-			this.throttledScroll();
-		});
-	}
-
-	/**
 	 * Throttle scrolling to prevent janky behavior during rapid updates.
 	 * Only scroll every 100ms max.
 	 */
@@ -342,7 +352,25 @@ export class ClaudeChatView extends ItemView {
 		const assistantBubble = this.threadEl.createDiv({ cls: "claude-chat-bubble claude-chat-bubble--assistant" });
 		assistantBubble.createEl("div", { text: "Claude", cls: "claude-chat-bubble-label" });
 		this.streamingAssistantBubbleEl = assistantBubble;
+
+		// Create container for incremental markdown renderer
+		const markdownContainer = assistantBubble.createDiv({ cls: "claude-chat-bubble-markdown" });
+
+		// Initialize incremark incremental renderer
+		this.incrementalRenderer = new IncrementalDomRenderer(markdownContainer, {
+			highlight: {
+				showLineNumbers: true,
+			},
+			math: {
+				katex: {
+					throwOnError: false,
+				},
+			},
+		});
+
+		// Keep reference to text element for fallback/thinking display
 		this.streamingAssistantTextEl = assistantBubble.createDiv({ cls: "claude-chat-bubble-text" });
+		this.streamingAssistantTextEl.style.display = "none"; // Hidden, used as fallback
 
 		this.streamingToolContainerEl = this.threadEl.createDiv({ cls: "claude-chat-steps" });
 		this.toolStepEls.clear();
@@ -350,10 +378,17 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	private finishStreamingAssistantText(finalText: string): void {
+		console.log("[ClaudeChat] finishStreamingAssistantText called");
 		// Cancel any pending frame and flush immediately
 		if (this.pendingAnimationFrame) {
 			cancelAnimationFrame(this.pendingAnimationFrame);
 			this.pendingAnimationFrame = null;
+		}
+
+		// Hide loading placeholder if still visible (no thinking text was streamed)
+		if (this.thinkingLoadingEl) {
+			this.thinkingLoadingEl.style.display = "none";
+			this.thinkingLoadingEl = null;
 		}
 
 		// Update buffer
@@ -361,165 +396,72 @@ export class ClaudeChatView extends ItemView {
 
 		const bubbleEl = this.streamingAssistantBubbleEl; // Capture before ending blocks
 
-		// Render final markdown content
+		// Finalize incremark renderer
+		if (this.incrementalRenderer) {
+			this.incrementalRenderer.finalize();
+		}
+
+		// Render final markdown content with Obsidian's renderer for full compatibility
 		void this.renderMarkdownContent(finalText).then(() => {
-			if (bubbleEl && finalText.trim().length > 0) {
-				this.appendActionBar(bubbleEl, finalText);
+			// Show Changes panel if there are edits
+			if (this.plugin.turnHasEdits && this.plugin.turnSnapshot && bubbleEl) {
+				void this.appendChangesPanel(bubbleEl);
 			}
 		});
 
-		// Also flush thinking buffer if any
-		if (this.streamingThinkingTextEl && this.thinkingTextBuffer) {
-			this.streamingThinkingTextEl.setText(this.thinkingTextBuffer);
+		// Finalize thinking renderer if any
+		if (this.thinkingIncrementalRenderer) {
+			this.thinkingIncrementalRenderer.finalize();
 		}
 
 		this.scrollThreadToBottom();
 
 		// Collapse the thinking panel when response is complete
+		console.log("[ClaudeChat] About to call collapseThinkingPanel");
 		this.collapseThinkingPanel();
+		console.log("[ClaudeChat] About to call endStreamingBlocks");
 
 		this.endStreamingBlocks();
-	}
-
-	private appendActionBar(container: HTMLElement, text: string): void {
-		// Clear any existing action bar first
-		const existingBar = container.querySelector(".claude-chat-action-bar");
-		if (existingBar) {
-			existingBar.remove();
-		}
-
-		const actionBar = container.createDiv({ cls: "claude-chat-action-bar" });
-
-		const replaceSelBtn = actionBar.createEl("button", { text: "Replace selection", cls: "claude-chat-action-btn" });
-		setIcon(replaceSelBtn, "replace");
-		replaceSelBtn.addEventListener("click", () => this.handleActionReplaceSelection(text, actionBar));
-
-		const appendBtn = actionBar.createEl("button", { text: "Append", cls: "claude-chat-action-btn" });
-		setIcon(appendBtn, "plus-square");
-		appendBtn.addEventListener("click", () => this.handleActionAppendToNote(text, actionBar));
-
-		const replaceNoteBtn = actionBar.createEl("button", { text: "Replace note", cls: "claude-chat-action-btn mod-warning" });
-		setIcon(replaceNoteBtn, "file-warning");
-		replaceNoteBtn.addEventListener("click", () => this.handleActionReplaceWholeNote(text, actionBar));
-
-		// Show Changes panel if there are edits (instead of View diff button)
-		if (this.plugin.turnHasEdits && this.plugin.turnSnapshot) {
-			void this.appendChangesPanel(actionBar);
-		}
-	}
-
-	/**
-	 * Append a Changes panel showing diff stats (+X -Y)
-	 */
-	private async appendChangesPanel(actionBar: HTMLElement): Promise<void> {
-		const stats = await this.calculateDiffStats();
-		if (!stats) return;
-
-		const changesPanel = actionBar.createDiv({ cls: "claude-chat-changes-panel" });
-		changesPanel.createSpan({ text: "Changes", cls: "claude-chat-changes-title" });
-		
-		const statsEl = changesPanel.createDiv({ cls: "claude-chat-changes-stats" });
-		if (stats.added > 0) {
-			statsEl.createSpan({ 
-				text: `+${stats.added}`, 
-				cls: "claude-chat-changes-added" 
-			});
-		}
-		if (stats.removed > 0) {
-			statsEl.createSpan({ 
-				text: `-${stats.removed}`, 
-				cls: "claude-chat-changes-removed" 
-			});
-		}
-
-		changesPanel.addEventListener("click", () => {
-			void this.showTurnDiff();
-		});
-	}
-
-	/**
-	 * Calculate diff stats for the current turn
-	 */
-	private async calculateDiffStats(): Promise<{ added: number; removed: number } | null> {
-		try {
-			const snapshot = this.plugin?.turnSnapshot;
-			if (!snapshot || snapshot.files.length === 0) {
-				return null;
-			}
-
-			const firstSnapshotFile = snapshot.files[0];
-			if (!firstSnapshotFile) {
-				return null;
-			}
-
-			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
-			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
-
-			const current = await this.plugin.getCurrentFileContent(original.filePath);
-			if (!current) {
-				return null;
-			}
-
-			// No changes
-			if (current.fullContent === original.fullContent) {
-				return { added: 0, removed: 0 };
-			}
-
-			const diff = generateInlineDiff(original.fullContent, current.fullContent);
-			const stats = getDiffStats(diff);
-			
-			return { added: stats.added, removed: stats.removed };
-		} catch (error) {
-			return null;
-		}
+		console.log("[ClaudeChat] finishStreamingAssistantText done");
 	}
 
 	/**
 	 * Render markdown content to the assistant bubble.
-	 * Replaces the plain text element with rendered markdown.
+	 * With incremark, this is now optional - incremark handles incremental rendering.
+	 * This method can be used for Obsidian-specific features if needed.
 	 */
 	private async renderMarkdownContent(markdown: string): Promise<void> {
 		if (!this.streamingAssistantBubbleEl) return;
 
-		// Remove the plain text element
+		// Remove the hidden plain text element if it exists
 		if (this.streamingAssistantTextEl) {
 			this.streamingAssistantTextEl.remove();
 			this.streamingAssistantTextEl = null;
 		}
 
-		// Create a container for the rendered markdown
-		const markdownContainer = this.streamingAssistantBubbleEl.createDiv({ cls: "claude-chat-bubble-markdown" });
-
-		// Get the active file path for context (or use empty string)
-		const activeFile = this.app.workspace.getActiveFile();
-		const sourcePath = activeFile?.path ?? "";
-
-		// Render markdown using Obsidian's renderer
-		try {
-			await MarkdownRenderer.render(
-				this.app,
-				markdown,
-				markdownContainer,
-				sourcePath,
-				this
-			);
-		} catch (error) {
-			// Fallback to plain text if rendering fails
-			markdownContainer.setText(markdown);
-		}
+		// incremark already rendered the markdown incrementally.
+		// If we need Obsidian-specific features (wikilinks, embeds, etc.),
+		// we could re-render here, but for now we'll keep incremark's output
+		// for better performance and streaming experience.
 
 		this.scrollThreadToBottom();
 	}
 
 	private endStreamingBlocks(): void {
+		console.log("[ClaudeChat] endStreamingBlocks called - clearing streaming refs only");
 		this.streamingAssistantBubbleEl = null;
 		this.streamingAssistantTextEl = null;
 		this.streamingThinkingTextEl = null;
-		this.thinkingPanelEl = null;
-		this.thinkingExpandBtnEl = null;
+		this.thinkingLoadingEl = null;
+		// NOTE: Do NOT clear thinkingPanelEl and thinkingExpandBtnEl here
+		// These need to persist so users can toggle the panel after streaming ends
 		this.thinkingDetailsEl = null;
 		this.streamingToolContainerEl = null;
 		this.toolStepEls.clear();
+
+		// Clear incremark renderers
+		this.incrementalRenderer = null;
+		this.thinkingIncrementalRenderer = null;
 
 		// Clear buffers and pending frame
 		this.assistantTextBuffer = "";
@@ -545,7 +487,7 @@ export class ClaudeChatView extends ItemView {
 
 		const header = panel.createDiv({ cls: "claude-chat-thinking-header" });
 		const titleWrap = header.createDiv({ cls: "claude-chat-thinking-title-wrap" });
-		titleWrap.createDiv({ cls: "claude-chat-thinking-status", text: "Thinking..." });
+		titleWrap.createDiv({ cls: "claude-chat-thinking-status", text: "Thinking" });
 		titleWrap.createDiv({ cls: "claude-chat-thinking-title", text: "Claude's reasoning" });
 
 		const expandBtn = header.createEl("button", {
@@ -562,7 +504,23 @@ export class ClaudeChatView extends ItemView {
 			const loadingEl = content.createDiv({ cls: "claude-chat-thinking-loading" });
 			loadingEl.createSpan({ cls: "claude-chat-thinking-loading-dots", text: "" });
 			loadingEl.createSpan({ text: "Analyzing your request" });
+			this.thinkingLoadingEl = loadingEl;
 		}
+
+		// Create markdown container for incremark incremental renderer
+		const markdownContainer = content.createDiv({ cls: "claude-chat-thinking-markdown" });
+
+		// Initialize incremark incremental renderer for thinking content
+		this.thinkingIncrementalRenderer = new IncrementalDomRenderer(markdownContainer, {
+			highlight: {
+				showLineNumbers: true,
+			},
+			math: {
+				katex: {
+					throwOnError: false,
+				},
+			},
+		});
 
 		this.streamingThinkingTextEl = content;
 
@@ -573,12 +531,16 @@ export class ClaudeChatView extends ItemView {
 			this.toggleThinkingPanel();
 		});
 
-		// Click handler for entire header (when collapsed)
-		header.addEventListener("click", (evt) => {
+		// Click handler for entire panel when collapsed
+		panel.addEventListener("click", (evt) => {
+			console.log("[ClaudeChat] Panel clicked, target:", evt.target, "currentTarget:", evt.currentTarget);
+			console.log("[ClaudeChat] Panel has is-collapsed:", panel.classList.contains("is-collapsed"));
+			console.log("[ClaudeChat] Panel classes:", panel.className);
 			// Only handle click if panel is collapsed (don't interfere when expanded)
 			if (panel.classList.contains("is-collapsed")) {
 				evt.preventDefault();
 				evt.stopPropagation();
+				console.log("[ClaudeChat] Calling toggleThinkingPanel");
 				this.toggleThinkingPanel();
 			}
 		});
@@ -587,21 +549,33 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	private toggleThinkingPanel(): void {
-		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) return;
+		console.log("[ClaudeChat] toggleThinkingPanel called");
+		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) {
+			console.log("[ClaudeChat] toggleThinkingPanel early return - missing refs");
+			return;
+		}
 		const isCollapsedNow = this.thinkingPanelEl.classList.contains("is-collapsed");
+		console.log("[ClaudeChat] toggleThinkingPanel isCollapsedNow:", isCollapsedNow);
 		if (isCollapsedNow) {
 			this.thinkingPanelEl.removeClass("is-collapsed");
 			setIcon(this.thinkingExpandBtnEl, "chevron-up");
+			console.log("[ClaudeChat] toggleThinkingPanel expanded panel");
 		} else {
 			this.thinkingPanelEl.addClass("is-collapsed");
 			setIcon(this.thinkingExpandBtnEl, "chevron-down");
+			console.log("[ClaudeChat] toggleThinkingPanel collapsed panel");
 		}
 	}
 
 	private collapseThinkingPanel(): void {
-		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) return;
+		console.log("[ClaudeChat] collapseThinkingPanel called");
+		if (!this.thinkingPanelEl || !this.thinkingExpandBtnEl) {
+			console.log("[ClaudeChat] collapseThinkingPanel early return - missing refs");
+			return;
+		}
 		this.thinkingPanelEl.addClass("is-collapsed");
 		setIcon(this.thinkingExpandBtnEl, "chevron-down");
+		console.log("[ClaudeChat] collapseThinkingPanel done, panel collapsed");
 	}
 
 	private appendOrUpdateToolStep(
@@ -662,7 +636,6 @@ export class ClaudeChatView extends ItemView {
 				this.contextEnabled = true;
 				this.renderContextChip();
 			});
-			this.updateEditButtons();
 			return;
 		}
 
@@ -671,7 +644,6 @@ export class ClaudeChatView extends ItemView {
 		if (!context || context.files.length === 0) {
 			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--warning" });
 			chip.setText("No active markdown note");
-			this.updateEditButtons();
 			return;
 		}
 
@@ -681,154 +653,53 @@ export class ClaudeChatView extends ItemView {
 		if (!primary) {
 			const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip claude-chat-chip--warning" });
 			chip.setText("No active markdown note");
-			this.updateEditButtons();
 			return;
 		}
 
 		const chip = this.contextChipEl.createDiv({ cls: "claude-chat-chip" });
-		chip.createSpan({ text: "Current note" });
-		chip.createSpan({ text: `· ${primary.fileName}` });
-		if (primary.hasSelection) {
-			chip.createSpan({ text: "· Selection + Full file", cls: "claude-chat-chip-selection" });
-		} else {
-			chip.createSpan({ text: "· Full file" });
+		chip.createSpan({ text: primary.fileName });
+		if (primary.hasSelection && primary.selectionContent.trim()) {
+			const preview = this.truncateSelectionPreview(primary.selectionContent, 2);
+			chip.createSpan({ text: `| ${preview}`, cls: "claude-chat-chip-selection" });
 		}
 		const removeBtn = chip.createEl("button", { text: "×", cls: "claude-chat-chip-remove" });
 		removeBtn.addEventListener("click", () => {
 			this.contextEnabled = false;
 			this.renderContextChip();
 		});
-
-		this.updateEditButtons();
-	}
-
-	private handleActionReplaceSelection(text: string, actionBar: HTMLElement): void {
-		try {
-			// Clear any existing undo state before applying new edit
-			this.plugin.clearUndoState();
-			
-			const result = this.plugin.replaceSelectionWithAssistantText(text);
-			new Notice("Selection replaced from chat response.");
-			this.appendSystemMessage(`Applied edit: replaced selection in ${result.filePath}`, "success");
-			this.renderContextChip();
-			
-			// Replace action bar with undo button
-			this.showUndoButton(actionBar, "replace-selection");
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			new Notice(msg);
-			this.appendSystemMessage(`Edit failed: ${msg}`, "error");
-		}
-	}
-
-	private handleActionAppendToNote(text: string, actionBar: HTMLElement): void {
-		try {
-			// Clear any existing undo state before applying new edit
-			this.plugin.clearUndoState();
-			
-			const result = this.plugin.appendAssistantTextToActiveNote(text);
-			new Notice("Assistant response appended to active note.");
-			this.appendSystemMessage(`Applied edit: appended to ${result.filePath}`, "success");
-			this.renderContextChip();
-			
-			// Replace action bar with undo button
-			this.showUndoButton(actionBar, "append-note");
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			new Notice(msg);
-			this.appendSystemMessage(`Edit failed: ${msg}`, "error");
-		}
-	}
-
-	private handleActionReplaceWholeNote(text: string, actionBar: HTMLElement): void {
-		const applyChange = () => {
-			try {
-				// Clear any existing undo state before applying new edit
-				this.plugin.clearUndoState();
-				
-				const result = this.plugin.replaceWholeActiveNote(text);
-				new Notice("Whole note replaced from chat response.");
-				this.appendSystemMessage(`Applied edit: replaced whole note ${result.filePath}`, "success");
-				this.renderContextChip();
-				
-				// Replace action bar with undo button
-				this.showUndoButton(actionBar, "replace-note");
-			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				new Notice(msg);
-				this.appendSystemMessage(`Edit failed: ${msg}`, "error");
-			}
-		};
-
-		if (this.plugin.shouldConfirmWholeNoteReplace()) {
-			new ConfirmReplaceModal(this.app, applyChange).open();
-			return;
-		}
-		applyChange();
 	}
 
 	/**
-	 * Replace action bar with undo button after an edit is applied
+	 * Truncate selection text to first N words with ellipsis if truncated.
 	 */
-	private showUndoButton(actionBar: HTMLElement, actionType: string): void {
-		actionBar.empty();
-
-		const undoBtn = actionBar.createEl("button", { 
-			text: "Undo", 
-			cls: "claude-chat-action-btn claude-chat-action-btn--undo" 
-		});
-		setIcon(undoBtn, "undo");
-		undoBtn.addEventListener("click", () => this.handleActionUndo(actionBar, actionType));
-
-		// Also add View diff button using turn snapshot
-		if (this.plugin.turnSnapshot) {
-			const viewDiffBtn = actionBar.createEl("button", { 
-				text: "View diff", 
-				cls: "claude-chat-action-btn" 
-			});
-			setIcon(viewDiffBtn, "git-compare");
-			viewDiffBtn.addEventListener("click", () => void this.showTurnDiff());
+	private truncateSelectionPreview(text: string, wordCount: number): string {
+		const words = text.trim().split(/\s+/);
+		if (words.length <= wordCount) {
+			return text.trim();
 		}
+		return words.slice(0, wordCount).join(" ") + "...";
 	}
 
-	/**
-	 * Handle undo action
-	 */
-	private handleActionUndo(actionBar: HTMLElement, originalActionType: string): void {
-		try {
-			const result = this.plugin.undoLastEdit();
-			new Notice("Edit undone.");
-			this.appendSystemMessage(`Undid ${result.action} in ${result.filePath}`, "success");
-			this.renderContextChip();
-			
-			// Restore original action bar (with edit buttons)
-			// Find the bubble container and re-create the action bar
-			const bubble = actionBar.closest(".claude-chat-bubble--assistant");
-			if (bubble) {
-				actionBar.remove();
-				// We need to get the original text to recreate the action bar
-				// The text is stored in lastAssistantText
-				if (this.lastAssistantText) {
-					this.appendActionBar(bubble as HTMLElement, this.lastAssistantText);
-				}
-			}
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			new Notice(`Undo failed: ${msg}`);
-			this.appendSystemMessage(`Undo failed: ${msg}`, "error");
-		}
-	}
-
-	private updateEditButtons(): void {
-		// Buttons are now dynamically rendered per message in appendActionBar
-	}
-
-	private setSendingState(isSending: boolean): void {
+	private setSendingState(isSending: boolean, isStreaming = false): void {
 		this.isSending = isSending;
+		this.isStreaming = isStreaming;
 		if (this.sendBtn) {
-			this.sendBtn.disabled = isSending;
+			this.sendBtn.disabled = false; // Always enabled - acts as stop when streaming
 			this.sendBtn.empty();
-			setIcon(this.sendBtn, isSending ? "hourglass" : "send");
+			// Show square (stop) icon when streaming, hourglass when sending but not yet streaming, send when idle
+			if (isStreaming) {
+				setIcon(this.sendBtn, "square");
+				this.sendBtn.setAttribute("aria-label", "Stop generation");
+				this.sendBtn.addClass("claude-chat-stop-btn");
+			} else if (isSending) {
+				setIcon(this.sendBtn, "hourglass");
+				this.sendBtn.setAttribute("aria-label", "Sending...");
+				this.sendBtn.removeClass("claude-chat-stop-btn");
+			} else {
+				setIcon(this.sendBtn, "send");
+				this.sendBtn.setAttribute("aria-label", "Send");
+				this.sendBtn.removeClass("claude-chat-stop-btn");
+			}
 		}
 		if (this.promptInputEl) {
 			this.promptInputEl.disabled = isSending;
@@ -912,6 +783,51 @@ export class ClaudeChatView extends ItemView {
 		// No longer used, handled by toggleSettingsPanel
 	}
 
+	/**
+	 * Clear the conversation thread and reset state for a new chat
+	 */
+	clearConversation(): void {
+		// Cancel any ongoing streaming
+		if (this.isSending) {
+			this.setSendingState(false);
+		}
+		if (this.pendingAnimationFrame) {
+			cancelAnimationFrame(this.pendingAnimationFrame);
+			this.pendingAnimationFrame = null;
+		}
+
+		// Clear incremark renderers
+		if (this.incrementalRenderer) {
+			this.incrementalRenderer.finalize();
+			this.incrementalRenderer = null;
+		}
+		if (this.thinkingIncrementalRenderer) {
+			this.thinkingIncrementalRenderer.finalize();
+			this.thinkingIncrementalRenderer = null;
+		}
+
+		// Clear streaming buffers
+		this.assistantTextBuffer = "";
+		this.thinkingTextBuffer = "";
+
+		// Reset turn snapshot at plugin level
+		this.plugin.clearTurnSnapshot();
+
+		// Clear the thread
+		if (this.threadEl) {
+			this.threadEl.empty();
+			this.appendSystemMessage("Ready. Ask Claude about your active note.");
+		}
+
+		// Reset streaming refs
+		this.endStreamingBlocks();
+		this.thinkingPanelEl = null;
+		this.thinkingExpandBtnEl = null;
+		this.thinkingDetailsEl = null;
+		this.thinkingLoadingEl = null;
+		this.toolStepEls.clear();
+	}
+
 	private describeSession(session: AuthSession): string {
 		if (session.status === "signed-in") {
 			return `Signed in (${session.accountLabel ?? session.mode}).`;
@@ -923,6 +839,72 @@ export class ClaudeChatView extends ItemView {
 			return "Auth pending. Paste callback URL/code in settings, then click Sign in again.";
 		}
 		return "Signed out.";
+	}
+
+	/**
+	 * Append a Changes panel showing diff stats (+X -Y)
+	 */
+	private async appendChangesPanel(bubbleEl: HTMLElement): Promise<void> {
+		const stats = await this.calculateDiffStats();
+		if (!stats) return;
+
+		const changesPanel = bubbleEl.createDiv({ cls: "claude-chat-changes-panel" });
+		changesPanel.createSpan({ text: "Changes", cls: "claude-chat-changes-title" });
+
+		const statsEl = changesPanel.createDiv({ cls: "claude-chat-changes-stats" });
+		if (stats.added > 0) {
+			statsEl.createSpan({
+				text: `+${stats.added}`,
+				cls: "claude-chat-changes-added"
+			});
+		}
+		if (stats.removed > 0) {
+			statsEl.createSpan({
+				text: `-${stats.removed}`,
+				cls: "claude-chat-changes-removed"
+			});
+		}
+
+		changesPanel.addEventListener("click", () => {
+			void this.showTurnDiff();
+		});
+	}
+
+	/**
+	 * Calculate diff stats for the current turn
+	 */
+	private async calculateDiffStats(): Promise<{ added: number; removed: number } | null> {
+		try {
+			const snapshot = this.plugin?.turnSnapshot;
+			if (!snapshot || snapshot.files.length === 0) {
+				return null;
+			}
+
+			const firstSnapshotFile = snapshot.files[0];
+			if (!firstSnapshotFile) {
+				return null;
+			}
+
+			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
+			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
+
+			const current = await this.plugin.getCurrentFileContent(original.filePath);
+			if (!current) {
+				return null;
+			}
+
+			// No changes
+			if (current.fullContent === original.fullContent) {
+				return { added: 0, removed: 0 };
+			}
+
+			const diff = generateInlineDiff(original.fullContent, current.fullContent);
+			const stats = getDiffStats(diff);
+
+			return { added: stats.added, removed: stats.removed };
+		} catch (error) {
+			return null;
+		}
 	}
 
 	/**
