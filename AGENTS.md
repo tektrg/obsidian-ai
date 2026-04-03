@@ -161,11 +161,15 @@ The bridge resolver in `src/chat/ClaudeSdkBridge.ts` expects the installed plugi
 
 ### Chat
 - `src/chat/ClaudeChatView.ts`
-- `src/chat/ClaudeChatClient.ts`
 - `src/chat/ClaudeSdkBridge.ts`
 
 ### Bridge script
 - `scripts/claude-chat-bridge.mjs`
+
+## Memory links
+
+- Context/snapshot architecture update + future multi-file context/diff roadmap:
+  - [[202604021849-obsidianaicontextsnapshotunificationandmultifilediffroadmap]]
 
 ## Settings and persisted state
 
@@ -276,12 +280,11 @@ Relevant file:
 ### 5. API key mode fails
 Check:
 - `anthropicApiKey` is set in plugin settings
-- direct `/v1/messages` call is being used only in API key mode
+- bridge script receives `ANTHROPIC_API_KEY` via environment (see `AnthropicApiKeyProvider.getRuntimeEnv()`)
 - request/response errors appear in Obsidian notices or console
 
 Relevant files:
 - `src/auth/AnthropicApiKeyProvider.ts`
-- `src/chat/ClaudeChatClient.ts`
 
 ### 6. Bridge script not found
 This usually means one of these:
