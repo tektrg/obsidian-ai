@@ -14,6 +14,7 @@
 	"license": "0-BSD",
 	"devDependencies": {
 		"@eslint/js": "9.30.1",
+		"@types/diff-match-patch": "^1.0.36",
 		"@types/node": "^16.11.6",
 		"esbuild": "0.25.5",
 		"eslint-plugin-obsidianmd": "0.1.9",
@@ -25,6 +26,8 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.87",
+		"diff-match-patch": "^1.0.5",
+		"incremark-renderer": "^1.1.0",
 		"obsidian": "latest"
 	}
 }
