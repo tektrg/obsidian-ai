@@ -1,4 +1,4 @@
-import { Notice, requestUrl } from "obsidian";
+import { Notice } from "obsidian";
 import { AuthProvider, AuthSession } from "./types";
 
 interface ClaudeOauthStore {
@@ -20,6 +20,30 @@ interface OAuthTokenResponse {
 	refresh_token?: string;
 	expires_in?: number;
 	scope?: string;
+	error?: string;
+	error_description?: string;
+}
+
+class OAuthTokenRequestError extends Error {
+	readonly status: number;
+	readonly payload: unknown;
+	readonly oauthError?: string;
+	readonly oauthErrorDescription?: string;
+
+	constructor(status: number, payload: unknown, message: string) {
+		super(message);
+		this.name = "OAuthTokenRequestError";
+		this.status = status;
+		this.payload = payload;
+
+		if (payload && typeof payload === "object") {
+			const root = payload as Record<string, unknown>;
+			this.oauthError = typeof root.error === "string" ? root.error : undefined;
+			this.oauthErrorDescription = typeof root.error_description === "string"
+				? root.error_description
+				: undefined;
+		}
+	}
 }
 
 const CLAUDE_OAUTH_CONFIG = {
@@ -36,6 +60,7 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 export class ClaudeMaxProvider implements AuthProvider {
 	private readonly store: ClaudeOauthStore;
 	private pending: PendingPkceState | null = null;
+	private refreshInFlight: Promise<void> | null = null;
 
 	constructor(store: ClaudeOauthStore) {
 		this.store = store;
@@ -81,11 +106,7 @@ export class ClaudeMaxProvider implements AuthProvider {
 
 	async logout(): Promise<AuthSession> {
 		this.pending = null;
-		this.store.claudeOauthAccessToken = "";
-		this.store.claudeOauthRefreshToken = "";
-		this.store.claudeOauthExpiresAt = 0;
-		this.store.claudeOauthScopes = [];
-		this.store.claudeOauthAuthorizationCode = "";
+		this.clearStoredSession();
 		return this.getSession();
 	}
 
@@ -117,7 +138,15 @@ export class ClaudeMaxProvider implements AuthProvider {
 		}
 
 		if (this.shouldRefresh()) {
-			await this.refreshAccessToken();
+			try {
+				await this.refreshAccessTokenWithMutex();
+			} catch (error) {
+				if (this.shouldClearSessionAfterRefreshFailure(error)) {
+					this.clearStoredSession();
+					throw new Error("Claude session expired or was revoked. Sign in again.");
+				}
+				throw error;
+			}
 		}
 
 		if (!this.store.claudeOauthAccessToken.trim()) {
@@ -186,31 +215,27 @@ export class ClaudeMaxProvider implements AuthProvider {
 			throw new Error("Claude login expired after 10 minutes. Please retry.");
 		}
 
-		const response = await requestUrl({
-			url: CLAUDE_OAUTH_CONFIG.tokenUrl,
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				accept: "application/json",
-				"user-agent": "ObsidianAI/1.0.0"
-			},
-			body: JSON.stringify({
-				grant_type: "authorization_code",
-				client_id: CLAUDE_OAUTH_CONFIG.clientId,
-				code,
-				redirect_uri: CLAUDE_OAUTH_CONFIG.redirectUri,
-				code_verifier: pending.codeVerifier,
-				state: pending.state
-			})
+		return await this.postOAuthTokenRequest({
+			grant_type: "authorization_code",
+			client_id: CLAUDE_OAUTH_CONFIG.clientId,
+			code,
+			redirect_uri: CLAUDE_OAUTH_CONFIG.redirectUri,
+			code_verifier: pending.codeVerifier,
+			state: pending.state
 		});
+	}
 
-		if (response.status < 200 || response.status >= 300) {
-			const msg = this.extractErrorMessage(response.json);
-			const detail = this.stringifyErrorPayload(response.json);
-			throw new Error(`Claude token exchange failed (${response.status}): ${msg}${detail ? ` | payload: ${detail}` : ""}`);
+	private async refreshAccessTokenWithMutex(): Promise<void> {
+		if (this.refreshInFlight) {
+			await this.refreshInFlight;
+			return;
 		}
 
-		return response.json as OAuthTokenResponse;
+		this.refreshInFlight = this.refreshAccessToken().finally(() => {
+			this.refreshInFlight = null;
+		});
+
+		await this.refreshInFlight;
 	}
 
 	private async refreshAccessToken(): Promise<void> {
@@ -219,28 +244,71 @@ export class ClaudeMaxProvider implements AuthProvider {
 			throw new Error("Claude session expired and no refresh token is available. Sign in again.");
 		}
 
-		const response = await requestUrl({
-			url: CLAUDE_OAUTH_CONFIG.tokenUrl,
+		const tokens = await this.postOAuthTokenRequest({
+			grant_type: "refresh_token",
+			refresh_token: refreshToken,
+			client_id: CLAUDE_OAUTH_CONFIG.clientId
+		});
+
+		this.persistTokens(tokens);
+	}
+
+	private async postOAuthTokenRequest(body: Record<string, unknown>): Promise<OAuthTokenResponse> {
+		const response = await fetch(CLAUDE_OAUTH_CONFIG.tokenUrl, {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
 				accept: "application/json",
 				"user-agent": "ObsidianAI/1.0.0"
 			},
-			body: JSON.stringify({
-				grant_type: "refresh_token",
-				refresh_token: refreshToken,
-				client_id: CLAUDE_OAUTH_CONFIG.clientId
-			})
+			body: JSON.stringify(body)
 		});
 
-		if (response.status < 200 || response.status >= 300) {
-			const msg = this.extractErrorMessage(response.json);
-			const detail = this.stringifyErrorPayload(response.json);
-			throw new Error(`Claude token refresh failed (${response.status}): ${msg}${detail ? ` | payload: ${detail}` : ""}`);
+		const raw = await response.text();
+		const payload = this.parsePayload(raw);
+		if (!response.ok) {
+			throw this.createOAuthTokenRequestError(response.status, payload);
 		}
 
-		this.persistTokens(response.json as OAuthTokenResponse);
+		if (!payload || typeof payload !== "object") {
+			throw new Error("Claude OAuth token endpoint returned an invalid response payload.");
+		}
+
+		return payload as OAuthTokenResponse;
+	}
+
+	private createOAuthTokenRequestError(status: number, payload: unknown): OAuthTokenRequestError {
+		const msg = this.extractErrorMessage(payload);
+		const detail = this.stringifyErrorPayload(payload);
+		const text = `Claude OAuth request failed (${status}): ${msg}${detail ? ` | payload: ${detail}` : ""}`;
+		return new OAuthTokenRequestError(status, payload, text);
+	}
+
+	private shouldClearSessionAfterRefreshFailure(error: unknown): boolean {
+		if (error instanceof OAuthTokenRequestError) {
+			const normalizedError = error.oauthError?.toLowerCase() ?? "";
+			const normalizedDescription = error.oauthErrorDescription?.toLowerCase() ?? "";
+			if (normalizedError.includes("invalid_grant") || normalizedError.includes("invalid_refresh")) {
+				return true;
+			}
+			if (normalizedDescription.includes("refresh token") || normalizedDescription.includes("revoked") || normalizedDescription.includes("expired")) {
+				return true;
+			}
+		}
+
+		const message = error instanceof Error ? error.message.toLowerCase() : "";
+		return message.includes("invalid_grant")
+			|| message.includes("invalid refresh")
+			|| message.includes("refresh token not found")
+			|| message.includes("revoked");
+	}
+
+	private clearStoredSession(): void {
+		this.store.claudeOauthAccessToken = "";
+		this.store.claudeOauthRefreshToken = "";
+		this.store.claudeOauthExpiresAt = 0;
+		this.store.claudeOauthScopes = [];
+		this.store.claudeOauthAuthorizationCode = "";
 	}
 
 	private persistTokens(tokens: OAuthTokenResponse): void {
@@ -286,9 +354,21 @@ export class ClaudeMaxProvider implements AuthProvider {
 		return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 	}
 
+	private parsePayload(raw: string): unknown {
+		const trimmed = raw.trim();
+		if (!trimmed) {
+			return {};
+		}
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return trimmed;
+		}
+	}
+
 	private extractErrorMessage(payload: unknown): string {
 		if (!payload || typeof payload !== "object") {
-			return "Unknown error";
+			return typeof payload === "string" && payload.trim() ? payload.trim() : "Unknown error";
 		}
 
 		const root = payload as Record<string, unknown>;
