@@ -1,10 +1,18 @@
-import { App, ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { App, ItemView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type ObsidianAiPlugin from "../main";
 import type { AuthSession } from "../auth/types";
 import type { BridgeStreamEvent } from "./ClaudeSdkBridge";
 import { DiffViewerModal } from "../components/DiffViewerModal";
 import { generateInlineDiff, getDiffStats } from "../utils/DiffGenerator";
 import { IncrementalDomRenderer } from "incremark-renderer";
+import {
+	parseFileMentions,
+	resolveFileMentions,
+	insertFileMention,
+	removeFileMention,
+	getFileDisplayName,
+	hasFileMentions,
+} from "../mentions/FileMentionService";
 
 export const CLAUDE_CHAT_VIEW_TYPE = "claude-chat-view";
 
@@ -39,6 +47,15 @@ export class ClaudeChatView extends ItemView {
 	// Incremental markdown renderer for streaming content
 	private incrementalRenderer: IncrementalDomRenderer | null = null;
 	private thinkingIncrementalRenderer: IncrementalDomRenderer | null = null;
+
+	// File mention state
+	private mentionDropdownEl: HTMLElement | null = null;
+	private mentionChipsEl: HTMLElement | null = null;
+	private mentionDropdownActive = false;
+	private mentionDropdownSelectedIndex = 0;
+	private mentionSearchQuery = '';
+	private mentionFiles: TFile[] = [];
+	private mentionCursorPosition = 0;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ObsidianAiPlugin) {
 		super(leaf);
@@ -112,18 +129,24 @@ export class ClaudeChatView extends ItemView {
 
 		this.renderContextChip();
 
+		// Mention chips container (below input)
+		this.mentionChipsEl = composerEl.createDiv({ cls: "claude-chat-mention-chips" });
+		this.mentionChipsEl.style.display = "none";
+
 		const promptContainer = composerEl.createDiv({ cls: "claude-chat-prompt-container" });
+
+		// Mention dropdown (positioned above input)
+		this.mentionDropdownEl = promptContainer.createDiv({ cls: "claude-chat-mention-dropdown" });
+		this.mentionDropdownEl.style.display = "none";
+
 		this.promptInputEl = promptContainer.createEl("textarea", { cls: "claude-chat-prompt" });
-		this.promptInputEl.placeholder = "Ask Claude to improve, summarize, or edit your current note...";
+		this.promptInputEl.placeholder = "Ask Claude to improve, summarize, or edit your current note... Type @ to mention files";
 		this.promptInputEl.rows = 1;
 		this.adjustTextareaHeight();
-		this.promptInputEl.addEventListener("input", () => this.adjustTextareaHeight());
-		this.promptInputEl.addEventListener("keydown", (evt) => {
-			if (evt.key === "Enter" && !evt.shiftKey) {
-				evt.preventDefault();
-				void this.handleSend();
-			}
-		});
+		this.promptInputEl.addEventListener("input", () => this.handleInput());
+		this.promptInputEl.addEventListener("keydown", (evt) => this.handleInputKeydown(evt));
+		this.promptInputEl.addEventListener("keyup", () => this.checkForMentionTrigger());
+		this.promptInputEl.addEventListener("click", () => this.closeMentionDropdown());
 
 		this.sendBtn = promptContainer.createEl("button", { cls: "claude-chat-send-btn clickable-icon", attr: { "aria-label": "Send" } });
 		setIcon(this.sendBtn, "send");
@@ -145,6 +168,270 @@ export class ClaudeChatView extends ItemView {
 		this.promptInputEl.style.height = `${newHeight}px`;
 	}
 
+	/**
+	 * Handle input changes - adjust height and check for mentions
+	 */
+	private handleInput(): void {
+		this.adjustTextareaHeight();
+		this.updateMentionChips();
+	}
+
+	/**
+	 * Check if the user typed @ to trigger mention dropdown
+	 */
+	private checkForMentionTrigger(): void {
+		if (!this.promptInputEl) return;
+
+		const cursorPos = this.promptInputEl.selectionStart || 0;
+		const text = this.promptInputEl.value;
+
+		// Check if we're in an active mention (after @ before space/newline)
+		if (this.mentionDropdownActive) {
+			// Extract text between @ trigger and cursor
+			const textAfterTrigger = text.slice(this.mentionCursorPosition, cursorPos);
+			// If user typed space or newline, close dropdown
+			if (/\s/.test(textAfterTrigger)) {
+				this.closeMentionDropdown();
+				return;
+			}
+			// Update search query and re-render
+			this.mentionSearchQuery = textAfterTrigger.toLowerCase();
+			this.renderMentionDropdown();
+			return;
+		}
+
+		// Check if @ was just typed before cursor
+		if (cursorPos > 0 && text[cursorPos - 1] === '@') {
+			this.mentionCursorPosition = cursorPos;
+			this.mentionSearchQuery = '';
+			this.openMentionDropdown();
+		}
+	}
+
+	/**
+	 * Handle keyboard events for mention dropdown navigation
+	 */
+	private handleInputKeydown(evt: KeyboardEvent): void {
+		if (this.mentionDropdownActive) {
+			switch (evt.key) {
+				case 'ArrowDown':
+					evt.preventDefault();
+					this.selectNextMention();
+					return;
+				case 'ArrowUp':
+					evt.preventDefault();
+					this.selectPreviousMention();
+					return;
+				case 'Enter':
+					evt.preventDefault();
+					this.insertSelectedMention();
+					return;
+				case 'Escape':
+					evt.preventDefault();
+					this.closeMentionDropdown();
+					return;
+			}
+		}
+
+		// Normal send on Enter (not Shift+Enter)
+		if (evt.key === 'Enter' && !evt.shiftKey) {
+			evt.preventDefault();
+			void this.handleSend();
+		}
+	}
+
+	/**
+	 * Open the mention dropdown with file suggestions
+	 */
+	private openMentionDropdown(): void {
+		if (!this.mentionDropdownEl || !this.promptInputEl) return;
+
+		// Get all markdown files in vault
+		const files = this.app.vault.getMarkdownFiles();
+		// Sort by recently modified
+		files.sort((a, b) => b.stat.mtime - a.stat.mtime);
+
+		this.mentionFiles = files;
+		this.mentionDropdownSelectedIndex = 0;
+		this.mentionDropdownActive = true;
+
+		this.renderMentionDropdown();
+		this.mentionDropdownEl.style.display = 'block';
+	}
+
+	/**
+	 * Close the mention dropdown
+	 */
+	private closeMentionDropdown(): void {
+		if (!this.mentionDropdownEl) return;
+		this.mentionDropdownActive = false;
+		this.mentionDropdownEl.style.display = 'none';
+		this.mentionDropdownEl.empty();
+	}
+
+	/**
+	 * Render the mention dropdown items
+	 */
+	private renderMentionDropdown(): void {
+		if (!this.mentionDropdownEl) return;
+		this.mentionDropdownEl.empty();
+
+		const filteredFiles = this.mentionSearchQuery
+			? this.mentionFiles.filter(f =>
+				f.name.toLowerCase().includes(this.mentionSearchQuery.toLowerCase()) ||
+				f.path.toLowerCase().includes(this.mentionSearchQuery.toLowerCase())
+			)
+			: this.mentionFiles.slice(0, 50); // Show top 50 recent files
+
+		if (filteredFiles.length === 0) {
+			this.mentionDropdownEl.createDiv({
+				cls: 'claude-chat-mention-item',
+				text: 'No files found'
+			});
+			return;
+		}
+
+		filteredFiles.forEach((file, index) => {
+			const item = this.mentionDropdownEl!.createDiv({
+				cls: 'claude-chat-mention-item'
+			});
+
+			if (index === this.mentionDropdownSelectedIndex) {
+				item.addClass('is-selected');
+			}
+
+			// Top row: icon + filename
+			const topRow = item.createDiv({ cls: 'claude-chat-mention-item-top' });
+			const iconEl = topRow.createSpan({ cls: 'claude-chat-mention-item-icon' });
+			setIcon(iconEl, 'file-text');
+			topRow.createSpan({ cls: 'claude-chat-mention-item-name', text: file.name });
+
+			// Bottom row: path (if in folder)
+			if (file.parent?.path && file.parent.path !== '/') {
+				item.createDiv({
+					cls: 'claude-chat-mention-item-path',
+					text: file.parent.path
+				});
+			}
+
+			item.addEventListener('click', () => {
+				this.insertMention(file.path);
+			});
+		});
+	}
+
+	/**
+	 * Select next item in dropdown
+	 */
+	private selectNextMention(): void {
+		this.mentionDropdownSelectedIndex = Math.min(
+			this.mentionDropdownSelectedIndex + 1,
+			this.mentionFiles.length - 1
+		);
+		this.renderMentionDropdown();
+	}
+
+	/**
+	 * Select previous item in dropdown
+	 */
+	private selectPreviousMention(): void {
+		this.mentionDropdownSelectedIndex = Math.max(
+			this.mentionDropdownSelectedIndex - 1,
+			0
+		);
+		this.renderMentionDropdown();
+	}
+
+	/**
+	 * Insert the selected mention
+	 */
+	private insertSelectedMention(): void {
+		const file = this.mentionFiles[this.mentionDropdownSelectedIndex];
+		if (file) {
+			this.insertMention(file.path);
+		}
+	}
+
+	/**
+	 * Insert a file mention at the trigger position
+	 */
+	private insertMention(filePath: string): void {
+		if (!this.promptInputEl) return;
+
+		const cursorPos = this.promptInputEl.selectionStart || 0;
+		const text = this.promptInputEl.value;
+
+		// Remove the @ character that triggered this
+		const beforeTrigger = text.slice(0, cursorPos - 1);
+		const afterCursor = text.slice(cursorPos);
+
+		// Insert the mention
+		const { newText, newCursorPos } = insertFileMention(
+			beforeTrigger + afterCursor,
+			cursorPos - 1,
+			filePath
+		);
+
+		this.promptInputEl.value = newText;
+		this.promptInputEl.setSelectionRange(newCursorPos, newCursorPos);
+		this.promptInputEl.focus();
+
+		this.closeMentionDropdown();
+		this.updateMentionChips();
+		this.adjustTextareaHeight();
+	}
+
+	/**
+	 * Update the mention chips display based on current input
+	 */
+	private updateMentionChips(): void {
+		if (!this.promptInputEl || !this.mentionChipsEl) return;
+
+		const text = this.promptInputEl.value;
+		const mentions = parseFileMentions(text);
+
+		// Clear existing chips
+		this.mentionChipsEl.empty();
+
+		if (mentions.files.length === 0) {
+			this.mentionChipsEl.style.display = 'none';
+			return;
+		}
+
+		this.mentionChipsEl.style.display = 'flex';
+
+		mentions.files.forEach(filePath => {
+			const chip = this.mentionChipsEl!.createDiv({ cls: 'claude-chat-mention-chip' });
+
+			// File icon
+			const iconEl = chip.createSpan();
+			setIcon(iconEl, 'file-text');
+
+			// File name
+			chip.createSpan({ text: getFileDisplayName(filePath) });
+
+			// Remove button
+			const removeBtn = chip.createEl('button', {
+				cls: 'claude-chat-mention-chip-remove',
+				text: '×'
+			});
+			removeBtn.addEventListener('click', () => {
+				this.removeMention(filePath);
+			});
+		});
+	}
+
+	/**
+	 * Remove a file mention
+	 */
+	private removeMention(filePath: string): void {
+		if (!this.promptInputEl) return;
+
+		const text = this.promptInputEl.value;
+		this.promptInputEl.value = removeFileMention(text, filePath);
+		this.updateMentionChips();
+	}
+
 	private async handleStop(): Promise<void> {
 		if (!this.isStreaming) return;
 		const stopped = this.plugin.stopGeneration();
@@ -156,8 +443,8 @@ export class ClaudeChatView extends ItemView {
 
 	private async handleSend(): Promise<void> {
 		if (!this.promptInputEl || this.isSending) return;
-		const prompt = this.promptInputEl.value.trim();
-		if (!prompt) {
+		const rawPrompt = this.promptInputEl.value.trim();
+		if (!rawPrompt) {
 			new Notice("Enter a prompt first.");
 			return;
 		}
@@ -169,14 +456,24 @@ export class ClaudeChatView extends ItemView {
 			return;
 		}
 
-		this.appendUserMessage(prompt);
+		// Resolve file mentions to semantic markers
+		let resolvedPrompt = rawPrompt;
+		if (hasFileMentions(rawPrompt)) {
+			const adapter = this.app.vault.adapter as unknown as { getBasePath?: () => string };
+			const vaultBasePath = adapter.getBasePath?.() || '';
+			resolvedPrompt = resolveFileMentions(rawPrompt, vaultBasePath);
+		}
+
+		// Display the raw user message (with [file:...] visible)
+		this.appendUserMessage(rawPrompt);
 		this.promptInputEl.value = "";
 		this.adjustTextareaHeight();
+		this.updateMentionChips();
 		this.setSendingState(true, false);
 		this.beginStreamingAssistantBlocks();
 
 		try {
-			const response = await this.plugin.sendChatPromptStream(prompt, {
+			const response = await this.plugin.sendChatPromptStream(resolvedPrompt, {
 				includeActiveContext: this.contextEnabled,
 			}, {
 				onEvent: (event) => {
