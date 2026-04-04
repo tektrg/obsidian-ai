@@ -1055,3 +1055,143 @@
 .claude-diff-close-action-btn:hover {
 	background: var(--interactive-accent-hover);
 }
+
+/* File Mention Dropdown */
+.claude-chat-mention-dropdown {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
+	max-height: 200px;
+	overflow-y: auto;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: var(--shadow-l);
+	z-index: 100;
+	margin-bottom: 4px;
+	/* macOS-style scrollbar: hide by default, show on scroll/hover */
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+}
+
+.claude-chat-mention-dropdown:hover {
+	scrollbar-color: var(--background-modifier-border) transparent;
+}
+
+.claude-chat-mention-dropdown::-webkit-scrollbar {
+	width: 8px;
+}
+
+.claude-chat-mention-dropdown::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.claude-chat-mention-dropdown::-webkit-scrollbar-thumb {
+	background: transparent;
+	border-radius: 4px;
+}
+
+.claude-chat-mention-dropdown:hover::-webkit-scrollbar-thumb,
+.claude-chat-mention-dropdown:active::-webkit-scrollbar-thumb {
+	background: var(--background-modifier-border);
+}
+
+.claude-chat-mention-dropdown:hover::-webkit-scrollbar-thumb:hover {
+	background: var(--background-modifier-border-hover);
+}
+
+.claude-chat-mention-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 12px;
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+}
+
+.claude-chat-mention-item:hover,
+.claude-chat-mention-item.is-selected {
+	background: var(--background-modifier-hover);
+}
+
+.claude-chat-mention-item-top {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.claude-chat-mention-item-icon {
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.claude-chat-mention-item-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+.claude-chat-mention-item-name {
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.claude-chat-mention-item-path {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding-left: 22px; /* Align with name (icon width + gap) */
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Mention Chips */
+.claude-chat-mention-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 4px 0;
+}
+
+.claude-chat-mention-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 10px;
+	border-radius: 999px;
+	font-size: var(--font-ui-smaller);
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+	color: var(--text-normal);
+	animation: slideInUp 0.15s ease-out forwards;
+}
+
+.claude-chat-mention-chip svg {
+	width: 12px;
+	height: 12px;
+	color: var(--text-muted);
+}
+
+.claude-chat-mention-chip-remove {
+	padding: 0;
+	width: 14px;
+	height: 14px;
+	line-height: 14px;
+	font-size: var(--font-ui-small);
+	border-radius: 999px;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.claude-chat-mention-chip-remove:hover {
+	color: var(--text-error);
+}
