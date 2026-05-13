@@ -1045,6 +1045,9 @@ export class ClaudeChatView extends ItemView {
 		if (this.promptInputEl) {
 			this.promptInputEl.disabled = isSending;
 		}
+		if (this.modelSelectEl) {
+			this.modelSelectEl.disabled = isSending;
+		}
 	}
 
 	private renderStatus(session: AuthSession): void {
@@ -1189,8 +1192,15 @@ export class ClaudeChatView extends ItemView {
 		const stats = await this.calculateDiffStats();
 		if (!stats) return;
 
+		// Get file count for display
+		const fileCount = this.plugin.editedFiles.length || this.plugin.turnSnapshot?.files.length || 0;
+		const isMultiFile = fileCount > 1;
+
 		const changesPanel = bubbleEl.createDiv({ cls: "claude-chat-changes-panel" });
-		changesPanel.createSpan({ text: "Changes", cls: "claude-chat-changes-title" });
+
+		// Title shows file count for multi-file
+		const titleText = isMultiFile ? `${fileCount} files changed` : "Changes";
+		changesPanel.createSpan({ text: titleText, cls: "claude-chat-changes-title" });
 
 		const statsEl = changesPanel.createDiv({ cls: "claude-chat-changes-stats" });
 		if (stats.added > 0) {
@@ -1216,33 +1226,25 @@ export class ClaudeChatView extends ItemView {
 	 */
 	private async calculateDiffStats(): Promise<{ added: number; removed: number } | null> {
 		try {
-			const snapshot = this.plugin?.turnSnapshot;
-			if (!snapshot || snapshot.files.length === 0) {
+			// Use tracked edited files for accurate multi-file stats
+			const changes = await this.plugin.getTurnFileChanges();
+
+			if (changes.length === 0) {
 				return null;
 			}
 
-			const firstSnapshotFile = snapshot.files[0];
-			if (!firstSnapshotFile) {
-				return null;
+			let totalAdded = 0;
+			let totalRemoved = 0;
+
+			for (const change of changes) {
+				if (change.error) continue;
+				const diff = generateInlineDiff(change.original, change.modified);
+				const stats = getDiffStats(diff);
+				totalAdded += stats.added;
+				totalRemoved += stats.removed;
 			}
 
-			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
-			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
-
-			const current = await this.plugin.getCurrentFileContent(original.filePath);
-			if (!current) {
-				return null;
-			}
-
-			// No changes
-			if (current.fullContent === original.fullContent) {
-				return { added: 0, removed: 0 };
-			}
-
-			const diff = generateInlineDiff(original.fullContent, current.fullContent);
-			const stats = getDiffStats(diff);
-
-			return { added: stats.added, removed: stats.removed };
+			return { added: totalAdded, removed: totalRemoved };
 		} catch (error) {
 			return null;
 		}
@@ -1257,42 +1259,73 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	/**
+	 * Track file change from tool execution.
+	 * Attempts to extract file path from tool detail and capture current content.
+	 */
+	private async trackFileChangeFromTool(detail: string, error?: string): Promise<void> {
+		try {
+			// Try to extract file path from detail
+			// Common formats: "path/to/file", "editing path/to/file", etc.
+			const pathMatch = detail.match(/([\w\-./]+\.(?:md|txt|js|ts|json|css|html|yaml|yml))/i);
+			if (!pathMatch?.[1]) return;
+
+			const filePath = pathMatch[1];
+
+			// Check if we're already tracking this file
+			const existing = this.plugin.editedFiles.find(f => f.filePath === filePath);
+			if (existing) {
+				// Update with error if failed
+				if (error) {
+					existing.error = error;
+				}
+				return;
+			}
+
+			// Get snapshot for this file if available
+			const snapshotFile = this.plugin.turnSnapshot?.files.find(f => f.filePath === filePath);
+			const original = snapshotFile?.fullContent ?? "";
+
+			// Track the file change
+			this.plugin.trackFileEdit(filePath, original, undefined, error ?? undefined);
+		} catch {
+			// Silently fail - tracking is best-effort
+		}
+	}
+
+	/**
 	 * Show diff comparing turn snapshot to current file state
+	 * Shows multi-file diff when multiple files were edited
 	 */
 	private async showTurnDiff(): Promise<void> {
 		try {
-			const snapshot = this.plugin?.turnSnapshot;
-			if (!snapshot || snapshot.files.length === 0) {
-				new Notice("No diff available.");
-				return;
-			}
+			// Get all file changes for the turn
+			const changes = await this.plugin.getTurnFileChanges();
 
-			const firstSnapshotFile = snapshot.files[0];
-			if (!firstSnapshotFile) {
-				new Notice("No diff available.");
-				return;
-			}
-
-			const primaryFilePath = snapshot.primaryFilePath ?? firstSnapshotFile.filePath;
-			const original = snapshot.files.find((f) => f.filePath === primaryFilePath) ?? firstSnapshotFile;
-
-			const current = await this.plugin.getCurrentFileContent(original.filePath);
-			if (!current) {
-				new Notice("Cannot access file content.");
-				return;
-			}
-
-			// Don't show diff if nothing changed
-			if (current.fullContent === original.fullContent) {
+			if (changes.length === 0) {
 				new Notice("No changes to show.");
 				return;
 			}
 
-			new DiffViewerModal(this.app, {
-				originalContent: original.fullContent,
-				modifiedContent: current.fullContent,
-				actionType: "replace-note",
-				filePath: original.filePath,
+			// Single file: use legacy DiffViewerModal for now (or could use new one)
+			if (changes.length === 1 && changes[0]) {
+				const change = changes[0];
+				if (change.error) {
+					new Notice(`Error in ${change.filePath}: ${change.error}`);
+					return;
+				}
+
+				// Use new multi-file modal even for single file (consistent experience)
+				new MultiFileDiffModal(this.app, {
+					changes,
+					consolidated: true,
+				}).open();
+				return;
+			}
+
+			// Multiple files: use MultiFileDiffModal
+			new MultiFileDiffModal(this.app, {
+				changes,
+				consolidated: true,
 			}).open();
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);

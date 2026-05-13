@@ -1,27 +1,51 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFile } from "obsidian";
 import { AuthController } from "./auth/AuthController";
-import { AuthSession } from "./auth/types";
-import { BridgeStreamEvent, ClaudeSdkBridge } from "./chat/ClaudeSdkBridge";
+import type { AuthMode, AuthSession } from "./auth/types";
+import { BridgeFactory } from "./chat/BridgeFactory";
+import type { BaseBridge } from "./chat/BaseBridge";
+import type { BridgeStreamEvent, ChatModelOption, PiAuth } from "./chat/types";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
 import { ActiveFileContextService, PromptContextSnapshot, formatPromptWithContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
 import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
+import type { FileChange } from "./types/diff";
+
+const CLAUDE_MODEL_LABELS: Record<string, string> = {
+	"claude-sonnet-4-5": "Sonnet 4.5",
+	"claude-sonnet-4-5-20250929": "Sonnet 4.5",
+	"claude-opus-4-6": "Opus 4.6",
+	"claude-opus-4-6-20251014": "Opus 4.6",
+	"claude-haiku-4-5": "Haiku 4.5",
+	"claude-haiku-4-5-20250929": "Haiku 4.5",
+};
+
+const PI_MODEL_LABELS: Record<string, string> = {
+	auto: "Auto",
+	"openai-codex/gpt-5.5": "GPT-5.5",
+	"openai-codex/gpt-5.4": "GPT-5.4",
+	"openai-codex/gpt-5.3-codex": "GPT-5.3 Codex",
+};
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<AuthMode, string> = {
+	"anthropic-api-key": "claude-sonnet-4-5-20250929",
+	"claude-max": "claude-sonnet-4-5-20250929",
+	"chatgpt-plus": "auto",
+};
 
 export default class ObsidianAiPlugin extends Plugin {
 	settings: ObsidianAiSettings;
 	private authController!: AuthController;
-	private sdkBridge!: ClaudeSdkBridge;
 	private activeFileContextService!: ActiveFileContextService;
 	private editorChangeApplier!: EditorChangeApplier;
 
 	// Turn-based diff tracking (at plugin level to survive view reloads)
 	turnSnapshot: PromptContextSnapshot | null = null;
 	turnHasEdits = false;
+	editedFiles: { filePath: string; original: string; modified?: string; error?: string }[] = [];
 
 	async onload() {
 		await this.loadSettings();
 		this.authController = new AuthController(this.settings);
-		this.sdkBridge = new ClaudeSdkBridge(this);
 		this.activeFileContextService = new ActiveFileContextService(this.app);
 		this.editorChangeApplier = new EditorChangeApplier(this.app);
 
@@ -287,6 +311,68 @@ export default class ObsidianAiPlugin extends Plugin {
 	clearTurnSnapshot(): void {
 		this.turnSnapshot = null;
 		this.turnHasEdits = false;
+		this.editedFiles = [];
+	}
+
+	/**
+	 * Track a file edit for diff comparison
+	 */
+	trackFileEdit(filePath: string, original: string, modified?: string, error?: string): void {
+		const existing = this.editedFiles.find(f => f.filePath === filePath);
+		if (existing) {
+			// Keep original, update modified/error
+			existing.modified = modified ?? existing.modified;
+			existing.error = error ?? existing.error;
+		} else {
+			this.editedFiles.push({ filePath, original, modified, error });
+		}
+		this.turnHasEdits = true;
+	}
+
+	/**
+	 * Get all file changes for the current turn
+	 */
+	async getTurnFileChanges(): Promise<FileChange[]> {
+		const changes: FileChange[] = [];
+		let id = 0;
+
+		for (const data of this.editedFiles) {
+			// Get current content if not already tracked
+			let modified = data.modified;
+			if (modified === undefined && !data.error) {
+				const current = await this.getCurrentFileContent(data.filePath);
+				if (current) {
+					modified = current.fullContent;
+				}
+			}
+
+			changes.push({
+				id: `change-${id++}`,
+				filePath: data.filePath,
+				toolType: 'Edit',
+				original: data.original,
+				modified: modified ?? '',
+				error: data.error,
+			});
+		}
+
+		// Fallback to snapshot files if no tracked edits
+		if (changes.length === 0 && this.turnSnapshot) {
+			for (const file of this.turnSnapshot.files) {
+				const current = await this.getCurrentFileContent(file.filePath);
+				if (current && current.fullContent !== file.fullContent) {
+					changes.push({
+						id: `change-${id++}`,
+						filePath: file.filePath,
+						toolType: 'Edit',
+						original: file.fullContent,
+						modified: current.fullContent,
+					});
+				}
+			}
+		}
+
+		return changes;
 	}
 
 	/**
@@ -354,7 +440,12 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<ObsidianAiSettings>);
+		const loaded = (await this.loadData()) as Partial<ObsidianAiSettings>;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+		this.settings.selectedModelsByProvider = {
+			...DEFAULT_SETTINGS.selectedModelsByProvider,
+			...loaded?.selectedModelsByProvider,
+		};
 	}
 
 	async saveSettings() {
