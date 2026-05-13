@@ -1,8 +1,9 @@
 import { App, ItemView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type ObsidianAiPlugin from "../main";
 import type { AuthSession } from "../auth/types";
-import type { BridgeStreamEvent } from "./ClaudeSdkBridge";
+import type { BridgeStreamEvent } from "./types";
 import { DiffViewerModal } from "../components/DiffViewerModal";
+import { MultiFileDiffModal } from "../components/MultiFileDiffModal";
 import { generateInlineDiff, getDiffStats } from "../utils/DiffGenerator";
 import { IncrementalDomRenderer } from "incremark-renderer";
 import {
@@ -22,6 +23,7 @@ export class ClaudeChatView extends ItemView {
 	private threadEl: HTMLElement | null = null;
 	private promptInputEl: HTMLTextAreaElement | null = null;
 	private contextChipEl: HTMLElement | null = null;
+	private modelSelectEl: HTMLSelectElement | null = null;
 	private settingsPanelEl: HTMLElement | null = null;
 	private contextEnabled = true;
 
@@ -82,6 +84,11 @@ export class ClaudeChatView extends ItemView {
 		this.renderContextChip();
 	}
 
+	refreshSettingsState(): void {
+		this.renderStatus(this.plugin.getChatAuthSession());
+		this.renderModelPicker();
+	}
+
 	private render(): void {
 		const { contentEl } = this;
 		contentEl.empty();
@@ -129,6 +136,18 @@ export class ClaudeChatView extends ItemView {
 
 		this.renderContextChip();
 
+		this.modelSelectEl = pillRow.createEl("select", {
+			cls: "claude-chat-model-select",
+			attr: { "aria-label": "Chat model" },
+		});
+		this.modelSelectEl.addEventListener("change", () => {
+			if (!this.modelSelectEl) return;
+			void this.plugin.setSelectedChatModel(this.modelSelectEl.value).then(() => {
+				this.renderModelPicker();
+			});
+		});
+		this.renderModelPicker();
+
 		// Mention chips container (below input)
 		this.mentionChipsEl = composerEl.createDiv({ cls: "claude-chat-mention-chips" });
 		this.mentionChipsEl.style.display = "none";
@@ -174,6 +193,27 @@ export class ClaudeChatView extends ItemView {
 	private handleInput(): void {
 		this.adjustTextareaHeight();
 		this.updateMentionChips();
+	}
+
+	private renderModelPicker(): void {
+		if (!this.modelSelectEl) return;
+
+		const selectedModel = this.plugin.getSelectedChatModel();
+		const options = this.plugin.getActiveModelOptions();
+		this.modelSelectEl.empty();
+
+		for (const option of options) {
+			const optionEl = this.modelSelectEl.createEl("option", {
+				text: option.label,
+				attr: { value: option.id },
+			});
+			if (option.description) {
+				optionEl.title = option.description;
+			}
+		}
+
+		this.modelSelectEl.value = selectedModel;
+		this.modelSelectEl.disabled = this.isSending;
 	}
 
 	/**
@@ -616,6 +656,10 @@ export class ClaudeChatView extends ItemView {
 				// Track if this was an edit tool
 				if (this.isEditTool(event.toolName)) {
 					this.plugin.turnHasEdits = true;
+					// Track the file change if detail contains file path
+					if (event.detail) {
+						void this.trackFileChangeFromTool(event.detail, event.ok === false ? event.detail : undefined);
+					}
 				}
 				return;
 			}

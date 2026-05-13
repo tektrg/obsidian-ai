@@ -26,6 +26,8 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.87",
+		"@mariozechner/pi-agent-core": "0.73.1",
+		"@mariozechner/pi-coding-agent": "0.73.1",
 		"diff-match-patch": "^1.0.5",
 		"incremark-renderer": "^1.1.0",
 		"obsidian": "latest"
