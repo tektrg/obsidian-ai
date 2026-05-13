@@ -1,4 +1,4 @@
-export type AuthMode = "anthropic-api-key" | "claude-max";
+export type AuthMode = "anthropic-api-key" | "claude-max" | "chatgpt-plus";
 
 export type AuthStatus = "signed-out" | "pending" | "signed-in" | "unsupported";
 

@@ -240,6 +240,7 @@ async function runChat(id, payload) {
 		options: {
 			model,
 			cwd,
+			executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
 			maxTurns: 8,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,

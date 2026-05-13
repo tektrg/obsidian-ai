@@ -1,30 +1,55 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import type { AuthMode } from "./auth/types";
 import ObsidianAiPlugin from "./main";
 
 export interface ObsidianAiSettings {
-	authMode: "anthropic-api-key" | "claude-max";
+	authMode: "anthropic-api-key" | "claude-max" | "chatgpt-plus";
 	anthropicApiKey: string;
 	defaultClaudeModel: string;
+	defaultPiModel: string;
+	selectedModelsByProvider: Partial<Record<AuthMode, string>>;
 	chatSystemPrompt: string;
 	requireConfirmForWholeNoteReplace: boolean;
+
+	// Claude Max OAuth
 	claudeOauthAccessToken: string;
 	claudeOauthRefreshToken: string;
 	claudeOauthExpiresAt: number;
 	claudeOauthScopes: string[];
 	claudeOauthAuthorizationCode: string;
+
+	// ChatGPT Plus OAuth
+	chatgptAccessToken: string;
+	chatgptRefreshToken: string;
+	chatgptIdToken: string;
+	chatgptExpiresAt: number;
 }
 
 export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	authMode: "anthropic-api-key",
 	anthropicApiKey: "",
 	defaultClaudeModel: "claude-sonnet-4-5",
+	defaultPiModel: "auto",
+	selectedModelsByProvider: {
+		"anthropic-api-key": "claude-sonnet-4-5-20250929",
+		"claude-max": "claude-sonnet-4-5-20250929",
+		"chatgpt-plus": "auto",
+	},
 	chatSystemPrompt: "You are a concise assistant helping with Obsidian notes.",
 	requireConfirmForWholeNoteReplace: true,
+
+	// Claude Max OAuth
 	claudeOauthAccessToken: "",
 	claudeOauthRefreshToken: "",
 	claudeOauthExpiresAt: 0,
 	claudeOauthScopes: [],
-	claudeOauthAuthorizationCode: ""
+	claudeOauthAuthorizationCode: "",
+
+	// ChatGPT Plus OAuth
+	chatgptAccessToken: "",
+	chatgptRefreshToken: "",
+	chatgptIdToken: "",
+	chatgptExpiresAt: 0,
 };
 
 export class ObsidianAiSettingTab extends PluginSettingTab {
@@ -38,17 +63,20 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		const selectedModels = this.plugin.settings.selectedModelsByProvider;
 
 		new Setting(containerEl)
 			.setName("Chat auth mode")
-			.setDesc("Choose Claude Max account OAuth or Anthropic API key fallback.")
+			.setDesc("Choose your preferred AI provider. Claude Max and ChatGPT Plus use OAuth. API key is direct.")
 			.addDropdown((dropdown) => dropdown
 				.addOption("anthropic-api-key", "Anthropic API key")
 				.addOption("claude-max", "Claude Max account")
+				.addOption("chatgpt-plus", "ChatGPT Plus (Codex)")
 				.setValue(this.plugin.settings.authMode)
 				.onChange(async (value) => {
-					this.plugin.settings.authMode = value as "anthropic-api-key" | "claude-max";
+					this.plugin.settings.authMode = value as "anthropic-api-key" | "claude-max" | "chatgpt-plus";
 					await this.plugin.saveSettings();
+					this.plugin.refreshChatViewsSettingsState();
 				}));
 
 		new Setting(containerEl)
@@ -63,14 +91,41 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName("Claude model")
-			.setDesc("Default model ID for chat requests.")
+			.setName("Anthropic API key model")
+			.setDesc("Default model for Anthropic API key requests.")
 			.addText((text) => text
-				.setPlaceholder("claude-sonnet-4-5")
-				.setValue(this.plugin.settings.defaultClaudeModel)
+				.setPlaceholder("claude-sonnet-4-5-20250929")
+				.setValue(selectedModels["anthropic-api-key"] ?? "claude-sonnet-4-5-20250929")
 				.onChange(async (value) => {
-					this.plugin.settings.defaultClaudeModel = value.trim() || "claude-sonnet-4-5";
+					selectedModels["anthropic-api-key"] = value.trim() || "claude-sonnet-4-5-20250929";
+					this.plugin.settings.defaultClaudeModel = selectedModels["anthropic-api-key"];
 					await this.plugin.saveSettings();
+					this.plugin.refreshChatViewsSettingsState();
+				}));
+
+		new Setting(containerEl)
+			.setName("Claude Max model")
+			.setDesc("Default model for Claude Max account requests.")
+			.addText((text) => text
+				.setPlaceholder("claude-sonnet-4-5-20250929")
+				.setValue(selectedModels["claude-max"] ?? "claude-sonnet-4-5-20250929")
+				.onChange(async (value) => {
+					selectedModels["claude-max"] = value.trim() || "claude-sonnet-4-5-20250929";
+					await this.plugin.saveSettings();
+					this.plugin.refreshChatViewsSettingsState();
+				}));
+
+		new Setting(containerEl)
+			.setName("ChatGPT/Pi model")
+			.setDesc("Default model for ChatGPT Plus/Codex requests.")
+			.addText((text) => text
+				.setPlaceholder("auto")
+				.setValue(selectedModels["chatgpt-plus"] ?? "auto")
+				.onChange(async (value) => {
+					selectedModels["chatgpt-plus"] = value.trim() || "auto";
+					this.plugin.settings.defaultPiModel = selectedModels["chatgpt-plus"];
+					await this.plugin.saveSettings();
+					this.plugin.refreshChatViewsSettingsState();
 				}));
 
 		new Setting(containerEl)

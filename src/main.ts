@@ -72,6 +72,7 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async onunload() {
+		BridgeFactory.clearCache();
 		// Don't detach leaves here - let the workspace layout persist across reloads
 		// The views will be reconnected when the plugin reloads
 	}
@@ -101,6 +102,31 @@ export default class ObsidianAiPlugin extends Plugin {
 		return this.activeFileContextService.captureContextSnapshot();
 	}
 
+	getActiveModelOptions(): ChatModelOption[] {
+		const bridgeType = this.authController.getBridgeType();
+		const capabilities = this.getActiveBridge().getCapabilities();
+		const optionMap = bridgeType === "pi" ? PI_MODEL_LABELS : CLAUDE_MODEL_LABELS;
+		return capabilities.availableModels.map((id) => ({
+			id,
+			label: optionMap[id] ?? id,
+		}));
+	}
+
+	getSelectedChatModel(): string {
+		return this.getChatModel();
+	}
+
+	async setSelectedChatModel(model: string): Promise<void> {
+		const nextModel = model.trim();
+		if (!nextModel) return;
+
+		const allowedModels = new Set(this.getActiveBridge().getCapabilities().availableModels);
+		if (!allowedModels.has(nextModel)) return;
+
+		this.settings.selectedModelsByProvider[this.authController.getMode()] = nextModel;
+		await this.saveSettings();
+	}
+
 	async startChatLogin(): Promise<AuthSession> {
 		const session = await this.authController.startLogin();
 		await this.saveSettings();
@@ -124,16 +150,19 @@ export default class ObsidianAiPlugin extends Plugin {
 		const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
 		const vaultBasePath = adapterWithBasePath.getBasePath?.();
 		if (!vaultBasePath) {
-			throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
+			throw new Error("Cannot resolve local vault path for chat bridge.");
 		}
-		await this.sdkBridge.ping(runtimeEnv);
-		await this.sdkBridge.chat({
+		const bridge = this.getActiveBridge();
+		const piAuth = await this.getActivePiAuth();
+		const model = this.getChatModel();
+		await bridge.ping(runtimeEnv, vaultBasePath);
+		await bridge.chat({
 			prompt: "Reply with exactly: OK",
-			model: this.settings.defaultClaudeModel,
+			model,
 			systemPrompt: this.settings.chatSystemPrompt,
 			cwd: vaultBasePath,
 			env: runtimeEnv,
-		});
+		}, piAuth);
 		new Notice("Connection test succeeded");
 	}
 
@@ -222,16 +251,19 @@ export default class ObsidianAiPlugin extends Plugin {
 		const adapterWithBasePath = this.app.vault.adapter as unknown as { getBasePath?: () => string };
 		const vaultBasePath = adapterWithBasePath.getBasePath?.();
 		if (!vaultBasePath) {
-			throw new Error("Cannot resolve local vault path for Claude SDK bridge.");
+			throw new Error("Cannot resolve local vault path for chat bridge.");
 		}
-		const result = await this.sdkBridge.chatStream({
+		const bridge = this.getActiveBridge();
+		const piAuth = await this.getActivePiAuth();
+		const model = this.getChatModel();
+		const result = await bridge.chatStream({
 			prompt: finalPrompt,
-			model: this.settings.defaultClaudeModel,
+			model,
 			systemPrompt: this.settings.chatSystemPrompt,
 			cwd: vaultBasePath,
 			env: runtimeEnv,
 			activeFilePath: activeFilePath,
-		}, handlers);
+		}, piAuth, handlers);
 		if (result.fileChanged) {
 			const editedPath = result.editedFilePath ?? activeFilePath ?? "active note";
 			return {
@@ -262,7 +294,47 @@ export default class ObsidianAiPlugin extends Plugin {
 	 * Returns true if a generation was stopped.
 	 */
 	stopGeneration(): boolean {
-		return this.sdkBridge.stop();
+		return this.getActiveBridge().stop();
+	}
+
+	refreshChatViewsSettingsState(): void {
+		const leaves = this.app.workspace.getLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
+		for (const leaf of leaves) {
+			if (leaf.view instanceof ClaudeChatView) {
+				leaf.view.refreshSettingsState();
+			}
+		}
+	}
+
+	private getActiveBridge(): BaseBridge {
+		return BridgeFactory.getBridge(this.authController.getBridgeType(), this);
+	}
+
+	private async getActivePiAuth(): Promise<PiAuth | undefined> {
+		if (this.authController.getBridgeType() !== "pi") {
+			return undefined;
+		}
+		const piAuth = await this.authController.getPiAuth();
+		if (!piAuth) {
+			throw new Error("No ChatGPT Plus OAuth token available. Complete Codex sign-in first.");
+		}
+		return piAuth;
+	}
+
+	private getChatModel(): string {
+		const mode = this.authController.getMode();
+		const selectedModel = this.settings.selectedModelsByProvider[mode];
+		const allowedModels = this.getActiveBridge().getCapabilities().availableModels;
+		if (selectedModel && allowedModels.includes(selectedModel)) {
+			return selectedModel;
+		}
+
+		const defaultModel = DEFAULT_MODEL_BY_PROVIDER[mode] || this.authController.getDefaultModel();
+		if (allowedModels.includes(defaultModel)) {
+			return defaultModel;
+		}
+
+		return allowedModels[0] ?? this.authController.getDefaultModel();
 	}
 
 	/**
