@@ -164,7 +164,7 @@ export default class ObsidianAiPlugin extends Plugin {
 	}
 
 	async testChatConnection(): Promise<void> {
-		const runtimeEnv = await this.authController.getRuntimeEnv();
+		const runtimeEnv = await this.getRuntimeEnvAndSave();
 		if (!runtimeEnv) {
 			throw new Error("No auth token available. Configure an Anthropic API key or complete Claude Max login.");
 		}
@@ -206,7 +206,7 @@ export default class ObsidianAiPlugin extends Plugin {
 
 		// Try to get runtime env - this will trigger token refresh if needed
 		try {
-			const runtimeEnv = await this.authController.getRuntimeEnv();
+			const runtimeEnv = await this.getRuntimeEnvAndSave();
 			if (!runtimeEnv) {
 				return {
 					valid: false,
@@ -265,7 +265,7 @@ export default class ObsidianAiPlugin extends Plugin {
 		const finalPrompt = contextSnapshot ? formatPromptWithContext(prompt, contextSnapshot) : prompt;
 		const activeFilePath = contextSnapshot?.primaryFilePath;
 
-		const runtimeEnv = await this.authController.getRuntimeEnv();
+		const runtimeEnv = await this.getRuntimeEnvAndSave();
 		if (!runtimeEnv) {
 			throw new Error("No auth token available. Configure an Anthropic API key or complete Claude Max login.");
 		}
@@ -450,5 +450,11 @@ export default class ObsidianAiPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	private async getRuntimeEnvAndSave(): Promise<Record<string, string> | null> {
+		const runtimeEnv = await this.authController.getRuntimeEnv();
+		await this.saveSettings();
+		return runtimeEnv;
 	}
 }
