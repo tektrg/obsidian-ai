@@ -15,6 +15,9 @@ interface AuthControllerStore {
 	claudeOauthExpiresAt: number;
 	claudeOauthScopes: string[];
 	claudeOauthAuthorizationCode: string;
+	claudeOauthPendingState: string;
+	claudeOauthPendingCodeVerifier: string;
+	claudeOauthPendingExpiresAt: number;
 
 	// ChatGPT Plus OAuth
 	chatgptAccessToken: string;
