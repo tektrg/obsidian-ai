@@ -1,4 +1,4 @@
-import { Notice } from "obsidian";
+import { Notice, requestUrl } from "obsidian";
 import { AuthProvider, AuthSession } from "./types";
 
 interface ClaudeOauthStore {
@@ -7,6 +7,9 @@ interface ClaudeOauthStore {
 	claudeOauthExpiresAt: number;
 	claudeOauthScopes: string[];
 	claudeOauthAuthorizationCode: string;
+	claudeOauthPendingState: string;
+	claudeOauthPendingCodeVerifier: string;
+	claudeOauthPendingExpiresAt: number;
 }
 
 interface PendingPkceState {
@@ -70,7 +73,7 @@ export class ClaudeMaxProvider implements AuthProvider {
 		if (!this.store.claudeOauthAccessToken.trim()) {
 			return {
 				mode: "claude-max",
-				status: this.pending ? "pending" : "signed-out"
+				status: this.getPendingState() ? "pending" : "signed-out"
 			};
 		}
 
@@ -84,9 +87,12 @@ export class ClaudeMaxProvider implements AuthProvider {
 	}
 
 	async startLogin(): Promise<AuthSession> {
-		if (!this.pending) {
-			this.pending = this.createPendingState();
-			const loginUrl = await this.buildAuthorizationUrl(this.pending);
+		const pending = this.getPendingState();
+		if (!pending) {
+			const nextPending = this.createPendingState();
+			this.setPendingState(nextPending);
+			this.store.claudeOauthAuthorizationCode = "";
+			const loginUrl = await this.buildAuthorizationUrl(nextPending);
 			window.open(loginUrl, "_blank");
 			new Notice("Opened Claude login. Paste callback URL/code into settings field, then click Test connection (or Sign in again).");
 			return this.getSession();
@@ -97,15 +103,15 @@ export class ClaudeMaxProvider implements AuthProvider {
 			throw new Error("No Claude OAuth code found. Paste callback URL/code in settings, then click Sign in again.");
 		}
 
-		const tokens = await this.exchangeCodeForTokens(code, this.pending);
-		this.pending = null;
+		const tokens = await this.exchangeCodeForTokens(code, pending);
+		this.clearPendingState();
 		this.persistTokens(tokens);
 		this.store.claudeOauthAuthorizationCode = "";
 		return this.getSession();
 	}
 
 	async logout(): Promise<AuthSession> {
-		this.pending = null;
+		this.clearPendingState();
 		this.clearStoredSession();
 		return this.getSession();
 	}
@@ -122,11 +128,12 @@ export class ClaudeMaxProvider implements AuthProvider {
 
 	async getRuntimeEnv(): Promise<Record<string, string> | null> {
 		if (!this.store.claudeOauthAccessToken.trim()) {
-			if (this.pending) {
+			const pending = this.getPendingState();
+			if (pending) {
 				const code = this.extractCode(this.store.claudeOauthAuthorizationCode?.trim() || "");
 				if (code) {
-					const tokens = await this.exchangeCodeForTokens(code, this.pending);
-					this.pending = null;
+					const tokens = await this.exchangeCodeForTokens(code, pending);
+					this.clearPendingState();
 					this.persistTokens(tokens);
 					this.store.claudeOauthAuthorizationCode = "";
 				} else {
@@ -156,6 +163,41 @@ export class ClaudeMaxProvider implements AuthProvider {
 		return {
 			CLAUDE_CODE_OAUTH_TOKEN: this.store.claudeOauthAccessToken
 		};
+	}
+
+	private getPendingState(): PendingPkceState | null {
+		if (this.pending && Date.now() <= this.pending.expiresAt) {
+			return this.pending;
+		}
+
+		const pendingState = this.store.claudeOauthPendingState?.trim();
+		const codeVerifier = this.store.claudeOauthPendingCodeVerifier?.trim();
+		const expiresAt = this.store.claudeOauthPendingExpiresAt || 0;
+		if (!pendingState || !codeVerifier || Date.now() > expiresAt) {
+			this.clearPendingState();
+			return null;
+		}
+
+		this.pending = {
+			state: pendingState,
+			codeVerifier,
+			expiresAt
+		};
+		return this.pending;
+	}
+
+	private setPendingState(pending: PendingPkceState): void {
+		this.pending = pending;
+		this.store.claudeOauthPendingState = pending.state;
+		this.store.claudeOauthPendingCodeVerifier = pending.codeVerifier;
+		this.store.claudeOauthPendingExpiresAt = pending.expiresAt;
+	}
+
+	private clearPendingState(): void {
+		this.pending = null;
+		this.store.claudeOauthPendingState = "";
+		this.store.claudeOauthPendingCodeVerifier = "";
+		this.store.claudeOauthPendingExpiresAt = 0;
 	}
 
 	private createPendingState(): PendingPkceState {
@@ -254,19 +296,21 @@ export class ClaudeMaxProvider implements AuthProvider {
 	}
 
 	private async postOAuthTokenRequest(body: Record<string, unknown>): Promise<OAuthTokenResponse> {
-		const response = await fetch(CLAUDE_OAUTH_CONFIG.tokenUrl, {
+		const response = await requestUrl({
+			url: CLAUDE_OAUTH_CONFIG.tokenUrl,
 			method: "POST",
+			contentType: "application/json",
 			headers: {
-				"content-type": "application/json",
 				accept: "application/json",
 				"user-agent": "ObsidianAI/1.0.0"
 			},
-			body: JSON.stringify(body)
+			body: JSON.stringify(body),
+			throw: false
 		});
 
-		const raw = await response.text();
+		const raw = response.text;
 		const payload = this.parsePayload(raw);
-		if (!response.ok) {
+		if (response.status < 200 || response.status >= 300) {
 			throw this.createOAuthTokenRequestError(response.status, payload);
 		}
 
@@ -309,6 +353,7 @@ export class ClaudeMaxProvider implements AuthProvider {
 		this.store.claudeOauthExpiresAt = 0;
 		this.store.claudeOauthScopes = [];
 		this.store.claudeOauthAuthorizationCode = "";
+		this.clearPendingState();
 	}
 
 	private persistTokens(tokens: OAuthTokenResponse): void {

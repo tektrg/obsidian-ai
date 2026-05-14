@@ -17,6 +17,9 @@ export interface ObsidianAiSettings {
 	claudeOauthExpiresAt: number;
 	claudeOauthScopes: string[];
 	claudeOauthAuthorizationCode: string;
+	claudeOauthPendingState: string;
+	claudeOauthPendingCodeVerifier: string;
+	claudeOauthPendingExpiresAt: number;
 
 	// ChatGPT Plus OAuth
 	chatgptAccessToken: string;
@@ -44,6 +47,9 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	claudeOauthExpiresAt: 0,
 	claudeOauthScopes: [],
 	claudeOauthAuthorizationCode: "",
+	claudeOauthPendingState: "",
+	claudeOauthPendingCodeVerifier: "",
+	claudeOauthPendingExpiresAt: 0,
 
 	// ChatGPT Plus OAuth
 	chatgptAccessToken: "",
