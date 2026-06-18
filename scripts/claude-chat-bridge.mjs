@@ -2,7 +2,21 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import process from "node:process";
+
+const DEBUG_LOG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "bridge-debug.log");
+const DEBUG_LOG_ENABLED = process.env.OBSIDIAN_AI_DEBUG_BRIDGE === "1";
+const CLAUDE_CODE_CLI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "claude-code-cli.js");
+function debugLog(...parts) {
+	if (!DEBUG_LOG_ENABLED) return;
+	try {
+		const stamp = new Date().toISOString();
+		fs.appendFileSync(DEBUG_LOG_PATH, `${stamp} ${parts.join(" ")}\n`);
+	} catch {
+		// logging must never break the bridge
+	}
+}
 
 function respond(message) {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -226,21 +240,27 @@ async function runChat(id, payload) {
 	const model = String(payload?.model ?? "claude-sonnet-4-5").trim();
 	const systemPrompt = typeof payload?.systemPrompt === "string" ? payload.systemPrompt : "";
 	const cwd = typeof payload?.cwd === "string" && payload.cwd.trim() ? payload.cwd : process.cwd();
+	const resumeSessionId = typeof payload?.resumeSessionId === "string" && payload.resumeSessionId.trim()
+		? payload.resumeSessionId.trim()
+		: undefined;
 	const targetFile = resolveTargetFile(payload, prompt, cwd);
 	const before = readFileSafe(targetFile.absolutePath);
+
+	debugLog("runChat:start", `id=${id}`, `cwd=${cwd}`, `resumeSessionId=${resumeSessionId ?? "(none)"}`, `payloadHasResume=${typeof payload?.resumeSessionId}`, `promptLength=${prompt.length}`);
 
 	const sdkMessages = [];
 	const state = {
 		toolByIndex: new Map(),
 		seenAssistantDelta: false,
 	};
+	let sessionId = resumeSessionId;
 
-	for await (const msg of query({
-		prompt,
-		options: {
+	const buildQueryOptions = (sessionToResume) => {
+		const options = {
 			model,
 			cwd,
 			executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
+			pathToClaudeCodeExecutable: CLAUDE_CODE_CLI_PATH,
 			maxTurns: 8,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
@@ -250,10 +270,46 @@ async function runChat(id, payload) {
 				preset: "claude_code",
 				append: buildSystemPrompt(systemPrompt, prompt, targetFile),
 			},
+		};
+		if (sessionToResume) {
+			options.resume = sessionToResume;
 		}
-	})) {
-		sdkMessages.push(msg);
-		emitMessageEvents(id, msg, state);
+		return options;
+	};
+
+	const consumeQuery = async (sessionToResume) => {
+		for await (const msg of query({ prompt, options: buildQueryOptions(sessionToResume) })) {
+			sdkMessages.push(msg);
+			if (msg && typeof msg === "object" && typeof msg.session_id === "string" && msg.session_id) {
+				sessionId = msg.session_id;
+			}
+			emitMessageEvents(id, msg, state);
+		}
+	};
+
+	try {
+		debugLog("runChat:query", `id=${id}`, resumeSessionId ? `RESUMING ${resumeSessionId}` : "FRESH (no resume)");
+		await consumeQuery(resumeSessionId);
+		debugLog("runChat:done", `id=${id}`, `finalSessionId=${sessionId ?? "(none)"}`);
+	} catch (error) {
+		// A stale/invalid resume id (e.g. transcript pruned or moved machines) must not
+		// break chat. As long as no user-visible output has streamed yet, discard the
+		// failed attempt and retry with a fresh session. We gate on seenAssistantDelta
+		// (not message count) because the SDK may emit an init/system message — which
+		// carries a session_id — before rejecting an invalid resume id.
+		if (resumeSessionId && !state.seenAssistantDelta) {
+			// Make the context loss visible instead of silently dropping it.
+			const reason = error instanceof Error ? error.message : String(error);
+			debugLog("runChat:resumeFAILED", `id=${id}`, `resumeSessionId=${resumeSessionId}`, `reason=${reason}`);
+			emitEvent(id, { type: "status", text: "Previous conversation could not be resumed — starting a fresh session." });
+			process.stderr.write(`[claude-chat-bridge] resume ${resumeSessionId} failed, starting fresh: ${reason}\n`);
+			sdkMessages.length = 0;
+			state.toolByIndex.clear();
+			sessionId = undefined;
+			await consumeQuery(undefined);
+		} else {
+			throw error;
+		}
 	}
 
 	const text = extractTextFromSdkMessages(sdkMessages);
@@ -271,6 +327,7 @@ async function runChat(id, payload) {
 		text,
 		fileChanged,
 		editedFilePath: fileChanged ? targetFile.relativePath : undefined,
+		sessionId,
 	};
 }
 

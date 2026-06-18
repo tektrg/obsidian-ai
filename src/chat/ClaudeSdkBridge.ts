@@ -1,5 +1,6 @@
 import { Plugin } from "obsidian";
 import { BaseBridge } from "./BaseBridge";
+import { installClaudeBridge } from "./ClaudeBridgeInstaller";
 import { BridgeCapabilities, ChatParams } from "./types";
 
 /**
@@ -19,7 +20,7 @@ export class ClaudeSdkBridge extends BaseBridge {
 	}
 
 	getBridgePath(basePath: string): string {
-		return `${basePath}/.obsidian/plugins/obsidian-ai/scripts/claude-chat-bridge.mjs`;
+		return installClaudeBridge(this.plugin, basePath);
 	}
 
 	getProviderType(): string {
@@ -58,6 +59,7 @@ export class ClaudeSdkBridge extends BaseBridge {
 				systemPrompt: params.systemPrompt,
 				cwd: params.cwd,
 				activeFilePath: params.activeFilePath,
+				resumeSessionId: params.resumeSessionId,
 				// Claude SDK doesn't support maxTurns or thinkingLevel
 			},
 		};

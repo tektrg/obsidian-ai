@@ -5,6 +5,7 @@ import { BridgeFactory } from "./chat/BridgeFactory";
 import type { BaseBridge } from "./chat/BaseBridge";
 import type { BridgeStreamEvent, ChatModelOption, PiAuth } from "./chat/types";
 import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
+import { OnboardingModal } from "./chat/OnboardingModal";
 import { ActiveFileContextService, PromptContextSnapshot, formatPromptWithContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
 import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
@@ -46,6 +47,9 @@ export default class ObsidianAiPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 		this.authController = new AuthController(this.settings);
+		// Trigger getSession() to clear any expired Claude Max pending state before UI renders
+		this.authController.getSession();
+		await this.saveSettings();
 		this.activeFileContextService = new ActiveFileContextService(this.app);
 		this.editorChangeApplier = new EditorChangeApplier(this.app);
 
@@ -93,6 +97,22 @@ export default class ObsidianAiPlugin extends Plugin {
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshChatViewsActiveContext()));
 		this.registerEvent(this.app.workspace.on("file-open", () => this.refreshChatViewsActiveContext()));
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshChatViewsActiveContext()));
+
+		if (this.isFirstLaunch()) {
+			this.app.workspace.onLayoutReady(() => {
+				new OnboardingModal(this, () => this.refreshChatViewsSettingsState()).open();
+			});
+		}
+	}
+
+	private isFirstLaunch(): boolean {
+		const s = this.settings;
+		if (s.onboardingCompleted) return false;
+		return (
+			!s.anthropicApiKey.trim() &&
+			!s.claudeOauthAccessToken.trim() &&
+			!s.chatgptAccessToken.trim()
+		);
 	}
 
 	async onunload() {
@@ -250,9 +270,9 @@ export default class ObsidianAiPlugin extends Plugin {
 
 	async sendChatPromptStream(
 		prompt: string,
-		options?: { includeActiveContext?: boolean },
+		options?: { includeActiveContext?: boolean; resumeSessionId?: string },
 		handlers?: { onEvent?: (event: BridgeStreamEvent) => void }
-	): Promise<{ text: string; fileChanged?: boolean; editedFilePath?: string }> {
+	): Promise<{ text: string; fileChanged?: boolean; editedFilePath?: string; sessionId?: string }> {
 		const includeContext = options?.includeActiveContext !== false; // default to true
 
 		// Clear and capture canonical turn snapshot before prompt send
@@ -287,6 +307,7 @@ export default class ObsidianAiPlugin extends Plugin {
 			cwd: vaultBasePath,
 			env: runtimeEnv,
 			activeFilePath: activeFilePath,
+			resumeSessionId: options?.resumeSessionId,
 		}, piAuth, handlers);
 		if (result.fileChanged) {
 			const editedPath = result.editedFilePath ?? activeFilePath ?? "active note";

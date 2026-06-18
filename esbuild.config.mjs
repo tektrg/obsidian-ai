@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "node:module";
+import { readFile } from "node:fs/promises";
 
 const banner =
 	`/*
@@ -11,11 +12,52 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
+const claudeRuntimeSourcePlugin = {
+	name: "claude-runtime-source",
+	setup(build) {
+		build.onResolve({ filter: /^virtual:(claude-chat-bridge-source|claude-code-cli-source)$/ }, (args) => ({
+			path: args.path,
+			namespace: "claude-runtime-source",
+		}));
+
+		build.onLoad({ filter: /^virtual:claude-chat-bridge-source$/, namespace: "claude-runtime-source" }, async () => {
+			const bridgeBundle = await esbuild.build({
+				entryPoints: ["scripts/claude-chat-bridge.mjs"],
+				bundle: true,
+				platform: "node",
+				format: "esm",
+				target: "node18",
+				write: false,
+				minify: prod,
+				external: builtinModules.flatMap((moduleName) => [moduleName, `node:${moduleName}`]),
+			});
+
+			const bridgeSource = bridgeBundle.outputFiles[0]?.text;
+			if (!bridgeSource) {
+				throw new Error("Failed to bundle Claude bridge source.");
+			}
+
+			return {
+				contents: `export default ${JSON.stringify(bridgeSource)};`,
+				loader: "js",
+			};
+		});
+
+		build.onLoad({ filter: /^virtual:claude-code-cli-source$/, namespace: "claude-runtime-source" }, async () => {
+			const cliSource = await readFile("node_modules/@anthropic-ai/claude-agent-sdk/cli.js", "utf8");
+			return {
+				contents: `export default ${JSON.stringify(cliSource)};`,
+				loader: "js",
+			};
+		});
+	},
+};
+
 // Using symlink for hot reload:
-// The test vault plugin folder is symlinked to this project root:
-// /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai -> /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+// The test vault plugin folder can be symlinked to this project root:
+// <vault>/.obsidian/plugins/obsidian-ai -> <plugin-source>
 // When you run `npm run dev`, changes are built to main.js in this folder,
-// and Obsidian hot-reloads automatically via the symlink.
+// and Obsidian can hot-reload through the symlink.
 
 const context = await esbuild.context({
 	banner: {
@@ -46,7 +88,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
-	plugins: [],
+	plugins: [claudeRuntimeSourcePlugin],
 });
 
 if (prod) {
