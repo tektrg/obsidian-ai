@@ -164,6 +164,7 @@ export abstract class BaseBridge {
 			fileChanged: result?.fileChanged === true,
 			editedFilePath: typeof result?.editedFilePath === "string" ? result.editedFilePath : undefined,
 			usage: result?.usage as { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number } | undefined,
+			sessionId: typeof result?.sessionId === "string" ? result.sessionId : undefined,
 		};
 	}
 
@@ -217,6 +218,7 @@ export abstract class BaseBridge {
 				activeFilePath: params.activeFilePath,
 				maxTurns: params.maxTurns,
 				thinkingLevel: params.thinkingLevel,
+				resumeSessionId: params.resumeSessionId,
 			},
 		};
 
@@ -255,6 +257,7 @@ export abstract class BaseBridge {
 				execSync?: (command: string, options: { encoding: string; shell?: boolean }) => Buffer | string;
 				spawn?: (
 					command: string,
+					args: string[],
 					options: {
 						shell: boolean;
 						cwd?: string;
@@ -276,7 +279,6 @@ export abstract class BaseBridge {
 		}
 
 		const nodePath = resolveNodePath(childProcessModule);
-		const command = `${nodePath} "${bridgePath}"`;
 
 		const request = this.buildRequest(method, params, piAuth);
 		const reqId = request.id as string;
@@ -293,8 +295,8 @@ export abstract class BaseBridge {
 		}
 		mergedEnv["OBSIDIAN_AI_NODE_PATH"] = nodePath;
 
-		const spawned = childProcessModule.spawn(command, {
-			shell: true,
+		const spawned = childProcessModule.spawn(nodePath, [bridgePath], {
+			shell: false,
 			cwd: params.cwd,
 			env: mergedEnv,
 			stdio: ["pipe", "pipe", "pipe"],

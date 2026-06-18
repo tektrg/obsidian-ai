@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type { AuthMode } from "./auth/types";
 import ObsidianAiPlugin from "./main";
 
@@ -10,6 +10,8 @@ export interface ObsidianAiSettings {
 	selectedModelsByProvider: Partial<Record<AuthMode, string>>;
 	chatSystemPrompt: string;
 	requireConfirmForWholeNoteReplace: boolean;
+	/** Persisted Claude SDK session id so the chat panel resumes context across restarts. */
+	chatSessionId: string;
 
 	// Claude Max OAuth
 	claudeOauthAccessToken: string;
@@ -26,6 +28,8 @@ export interface ObsidianAiSettings {
 	chatgptRefreshToken: string;
 	chatgptIdToken: string;
 	chatgptExpiresAt: number;
+
+	onboardingCompleted: boolean;
 }
 
 export const DEFAULT_SETTINGS: ObsidianAiSettings = {
@@ -40,6 +44,7 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	},
 	chatSystemPrompt: "You are a concise assistant helping with Obsidian notes.",
 	requireConfirmForWholeNoteReplace: true,
+	chatSessionId: "",
 
 	// Claude Max OAuth
 	claudeOauthAccessToken: "",
@@ -56,6 +61,8 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	chatgptRefreshToken: "",
 	chatgptIdToken: "",
 	chatgptExpiresAt: 0,
+
+	onboardingCompleted: false,
 };
 
 export class ObsidianAiSettingTab extends PluginSettingTab {
@@ -80,9 +87,21 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 				.addOption("chatgpt-plus", "ChatGPT Plus (Codex)")
 				.setValue(this.plugin.settings.authMode)
 				.onChange(async (value) => {
+					const prevMode = this.plugin.settings.authMode;
+					const prevSession = this.plugin.getChatAuthSession();
 					this.plugin.settings.authMode = value as "anthropic-api-key" | "claude-max" | "chatgpt-plus";
 					await this.plugin.saveSettings();
 					this.plugin.refreshChatViewsSettingsState();
+					if (prevSession.status === "signed-in" && value !== prevMode) {
+						const labels: Record<string, string> = {
+							"anthropic-api-key": "API key",
+							"claude-max": "Claude Max",
+							"chatgpt-plus": "ChatGPT Plus",
+						};
+						new Notice(
+							`Switched to ${labels[value] ?? value}. Your ${labels[prevMode] ?? prevMode} session is still stored — switch back to restore it.`
+						);
+					}
 				}));
 
 		new Setting(containerEl)

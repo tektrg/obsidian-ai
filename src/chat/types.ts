@@ -46,6 +46,8 @@ export interface ChatParams {
 	activeFilePath?: string;
 	maxTurns?: number;
 	thinkingLevel?: "none" | "low" | "medium" | "high";
+	/** SDK session id to resume so the model retains prior conversation context. */
+	resumeSessionId?: string;
 }
 
 // ============================================================================
@@ -57,6 +59,8 @@ export interface ChatResult {
 	fileChanged?: boolean;
 	editedFilePath?: string;
 	usage?: TokenUsage;
+	/** SDK session id for this turn; persist it to resume the conversation later. */
+	sessionId?: string;
 }
 
 // ============================================================================

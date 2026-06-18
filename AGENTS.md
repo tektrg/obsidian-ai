@@ -35,16 +35,16 @@ When debugging chat/auth issues, work in **`obsidian-ai`**, not the reader plugi
 ## Active local dev target
 
 The active local Obsidian vault for development is:
-- `/Users/trungluong/clawd`
+- `<DEV_VAULT_PATH>`
 
 The plugin is exposed to Obsidian via symlink here:
-- `/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai`
 
 That symlink points to the source project here:
-- `/Users/trungluong/01_Project/obsidian-plugins/obsidian-ai`
+- `<PLUGIN_SOURCE_PATH>`
 
 The reader plugin is also symlinked separately:
-- `/Users/trungluong/clawd/.obsidian/plugins/obsidian-reader-plugin`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-reader-plugin`
 
 ## Build and dev workflow
 
@@ -72,8 +72,8 @@ For the best development experience, use **Hot-Reload** plugin + symlink setup.
 ### Symlink structure
 The plugin folder in the test vault is symlinked to the source project:
 ```
-/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
-    → /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai
+    → <PLUGIN_SOURCE_PATH>
 ```
 
 This means:
@@ -88,7 +88,7 @@ This means:
 - Detects dev plugins by `.git` directory or `.hotreload` file
 
 **Status:** Already installed in test vault at:
-- `/Users/trungluong/clawd/.obsidian/plugins/hot-reload/`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/hot-reload/`
 
 ### Dev server in tmux
 Run the dev server in a detached tmux session:
@@ -126,8 +126,8 @@ This project uses a **symlink-based deployment** for development:
 
 **Symlink:**
 ```
-/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
-    → /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai
+    → <PLUGIN_SOURCE_PATH>
 ```
 
 Because the vault plugin directory is a **symlink to this source project**, build output lands in the source project and is visible to Obsidian through the symlink. No file copying is performed during development.
@@ -176,7 +176,7 @@ The bridge resolver in `src/chat/ClaudeSdkBridge.ts` expects the installed plugi
 Obsidian stores plugin data under the plugin ID namespace.
 
 For the active local vault, plugin state is here:
-- `/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai/data.json`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai/data.json`
 
 This may contain:
 - `authMode`
@@ -210,25 +210,25 @@ Project convention: use **tmux** for terminal commands.
 
 ### Build in tmux
 ```bash
-tmux new-session -d -s ai-build 'cd /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai && npm run build'
+tmux new-session -d -s ai-build 'cd <PLUGIN_SOURCE_PATH> && npm run build'
 tmux capture-pane -pt ai-build:0 -S -200
 ```
 
 ### Inspect plugin state in tmux
 ```bash
-tmux new-session -d -s ai-state 'cat /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai/data.json'
+tmux new-session -d -s ai-state 'cat <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai/data.json'
 tmux capture-pane -pt ai-state:0 -S -200
 ```
 
 ### Verify bridge script exists in installed path
 ```bash
-tmux new-session -d -s ai-bridge 'ls -la /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai/scripts'
+tmux new-session -d -s ai-bridge 'ls -la <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai/scripts'
 tmux capture-pane -pt ai-bridge:0 -S -200
 ```
 
 ### Inspect symlink target
 ```bash
-tmux new-session -d -s ai-link 'ls -ld /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai'
+tmux new-session -d -s ai-link 'ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai'
 tmux capture-pane -pt ai-link:0 -S -50
 ```
 
@@ -243,8 +243,8 @@ Check:
 
 Useful checks:
 ```bash
-ls -la /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
-ls -la /Users/trungluong/01_Project/obsidian-plugins/obsidian-ai
+ls -la <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai
+ls -la <PLUGIN_SOURCE_PATH>
 ```
 
 ### 2. Commands do not appear
@@ -266,7 +266,7 @@ Check in this order:
 Relevant files:
 - `src/chat/ClaudeSdkBridge.ts`
 - `scripts/claude-chat-bridge.mjs`
-- `/Users/trungluong/clawd/.obsidian/plugins/obsidian-ai/data.json`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai/data.json`
 
 ### 4. Claude Max sign-in does not complete
 Check:
@@ -295,8 +295,8 @@ This usually means one of these:
 
 Check:
 ```bash
-ls -ld /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai
-ls -la /Users/trungluong/clawd/.obsidian/plugins/obsidian-ai/scripts
+ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai
+ls -la <DEV_VAULT_PATH>/.obsidian/plugins/obsidian-ai/scripts
 ```
 
 ### 7. esbuild platform mismatch
