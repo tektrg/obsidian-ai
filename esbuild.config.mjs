@@ -55,7 +55,7 @@ const claudeRuntimeSourcePlugin = {
 
 // Using symlink for hot reload:
 // The test vault plugin folder can be symlinked to this project root:
-// <vault>/.obsidian/plugins/obsidian-ai -> <plugin-source>
+// <vault>/.obsidian/plugins/claude-chat -> <plugin-source>
 // When you run `npm run dev`, changes are built to main.js in this folder,
 // and Obsidian can hot-reload through the symlink.
 

@@ -104,7 +104,7 @@ export class MultiFileDiffModal extends Modal {
 
 	private loadSettings(): DiffViewerSettings {
 		try {
-			const saved = localStorage.getItem("obsidian-ai-diff-settings");
+			const saved = localStorage.getItem("claude-chat-diff-settings");
 			if (saved) {
 				return { diffStyle: 'unified', disableBackground: false, ...JSON.parse(saved) };
 			}
@@ -116,7 +116,7 @@ export class MultiFileDiffModal extends Modal {
 
 	private saveSettings(): void {
 		try {
-			localStorage.setItem("obsidian-ai-diff-settings", JSON.stringify(this.settings));
+			localStorage.setItem("claude-chat-diff-settings", JSON.stringify(this.settings));
 		} catch {
 			// Ignore save errors
 		}

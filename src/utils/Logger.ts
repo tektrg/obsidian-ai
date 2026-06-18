@@ -6,7 +6,7 @@ export class Logger {
 	private logFile: string;
 	private maxLines: number;
 
-	constructor(logFile: string = ".obsidian/plugins/obsidian-ai/debug.log", maxLines: number = 1000) {
+	constructor(logFile: string = ".obsidian/plugins/claude-chat/debug.log", maxLines: number = 1000) {
 		this.logFile = logFile;
 		this.maxLines = maxLines;
 	}

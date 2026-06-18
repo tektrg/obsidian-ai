@@ -38,7 +38,7 @@ export class PiSdkBridge extends BaseBridge {
 	}
 
 	getBridgePath(basePath: string): string {
-		return `${basePath}/.obsidian/plugins/obsidian-ai/scripts/pi-agent-bridge.mjs`;
+		return `${basePath}/${this.plugin.app.vault.configDir}/plugins/${this.plugin.manifest.id}/scripts/pi-agent-bridge.mjs`;
 	}
 
 	getProviderType(): string {

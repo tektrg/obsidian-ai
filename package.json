@@ -1,6 +1,6 @@
 {
-	"name": "obsidian-ai",
-	"version": "1.0.0",
+	"name": "claude-chat",
+	"version": "1.0.1",
 	"description": "Claude chat panel for Obsidian with Claude Max OAuth and Anthropic API key fallback.",
 	"main": "main.js",
 	"type": "module",
