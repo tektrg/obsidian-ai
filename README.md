@@ -1,6 +1,6 @@
-# Obsidian AI
+# Claude Chat
 
-Obsidian AI is a desktop-only Obsidian plugin that adds a Claude chat panel with Claude Max OAuth support and an Anthropic API key fallback.
+Claude Chat is a desktop-only Obsidian plugin that adds a Claude chat panel with Claude Max OAuth support and an Anthropic API key fallback.
 
 ## Features
 
