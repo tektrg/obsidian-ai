@@ -1,6 +1,6 @@
 {
 	"name": "ai-chat-sidebar",
-	"version": "1.0.4",
+	"version": "1.0.5",
 	"description": "Chat sidebar with Claude Max OAuth, Anthropic API keys, and ChatGPT Plus/Codex support.",
 	"main": "main.js",
 	"type": "module",

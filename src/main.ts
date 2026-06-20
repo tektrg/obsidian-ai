@@ -125,13 +125,13 @@ export default class ObsidianAiPlugin extends Plugin {
 		const existing = this.app.workspace.getLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
 		const existingLeaf = existing[0];
 		if (existingLeaf) {
-			await this.app.workspace.revealLeaf(existingLeaf);
+			this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
 			return;
 		}
 
 		const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
 		await leaf.setViewState({ type: CLAUDE_CHAT_VIEW_TYPE, active: true });
-		await this.app.workspace.revealLeaf(leaf);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
 	getChatAuthSession(): AuthSession {
