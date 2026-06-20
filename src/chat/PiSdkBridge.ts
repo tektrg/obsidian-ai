@@ -1,6 +1,6 @@
 import { Plugin } from "obsidian";
 import { BaseBridge } from "./BaseBridge";
-import { installPiBridge } from "./ClaudeBridgeInstaller";
+import { getPiBridgeSource } from "./BridgeSources";
 import { BridgeCapabilities, ChatParams, PiAuth, BridgeStreamHandlers, ChatResult } from "./types";
 
 /**
@@ -28,8 +28,8 @@ export class PiSdkBridge extends BaseBridge {
 		super(plugin);
 	}
 
-	getBridgePath(basePath: string): string {
-		return installPiBridge(this.plugin, basePath);
+	getBridgeSource(): string {
+		return getPiBridgeSource();
 	}
 
 	getProviderType(): string {

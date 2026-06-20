@@ -162,6 +162,10 @@
 	display: none;
 }
 
+.claude-chat-hidden {
+	display: none;
+}
+
 .claude-chat-bubble-text {
 	white-space: pre-wrap;
 	word-break: break-word;
@@ -1785,7 +1789,7 @@
 /* ── Auth card input toggle ──────────────────────────────────── */
 
 .composer-input-hidden {
-	display: none !important;
+	display: none;
 }
 
 /* ── Auth status dot ─────────────────────────────────────────── */

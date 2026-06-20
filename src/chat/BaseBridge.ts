@@ -19,7 +19,7 @@ import {
  * - JSONL protocol handling
  * 
  * Subclasses must implement:
- * - getBridgePath(): Path to the bridge script
+ * - getBridgeSource(): Bridge script source to run in a subprocess
  * - getProviderType(): Identifier for the provider
  * - getCapabilities(): Feature flags for this bridge
  * - buildRequest(): Construct the bridge-specific request
@@ -28,6 +28,56 @@ import {
 const REQUEST_TIMEOUT_MS = 300000; // 5 minutes for complex tasks
 
 let cachedNodePath: string | undefined;
+
+type ChildProcessModule = {
+	execSync?: (command: string, options: { encoding: string; shell?: boolean }) => Buffer | string;
+	spawn?: (
+		command: string,
+		args: string[],
+		options: {
+			shell: boolean;
+			cwd?: string;
+			env: Record<string, string>;
+			stdio: ["pipe", "pipe", "pipe"];
+		}
+	) => {
+		stdout: { on: (event: "data", cb: (chunk: string) => void) => void };
+		stderr: { on: (event: "data", cb: (chunk: string) => void) => void };
+		stdin: { write: (data: string) => void; end: () => void };
+		on: (event: string, cb: (...args: unknown[]) => void) => void;
+		kill: () => void;
+	};
+};
+
+type RuntimeModules = {
+	childProcess: ChildProcessModule;
+	fs: {
+		existsSync: (path: string) => boolean;
+		mkdirSync: (path: string, options: { recursive: boolean }) => void;
+		readFileSync: (path: string, encoding: "utf8") => string;
+		writeFileSync: (path: string, contents: string, encoding: "utf8") => void;
+	};
+	path: {
+		join: (...parts: string[]) => string;
+	};
+	os: {
+		tmpdir: () => string;
+	};
+	crypto: {
+		createHash: (algorithm: "sha256") => {
+			update: (contents: string) => { digest: (encoding: "hex") => string };
+		};
+	};
+};
+
+type NodeRequire = {
+	(name: "child_process"): ChildProcessModule;
+	(name: "fs"): Partial<RuntimeModules["fs"]>;
+	(name: "path"): Partial<RuntimeModules["path"]>;
+	(name: "os"): Partial<RuntimeModules["os"]>;
+	(name: "crypto"): Partial<RuntimeModules["crypto"]>;
+	(name: string): unknown;
+};
 
 function resolveNodePath(childProcessModule: unknown): string {
 	if (cachedNodePath) return cachedNodePath;
@@ -67,6 +117,51 @@ function resolveNodePath(childProcessModule: unknown): string {
 	return cachedNodePath;
 }
 
+function loadRuntimeModules(requireModule: NodeRequire | undefined): RuntimeModules {
+	if (!requireModule) {
+		throw new Error("Node modules are unavailable in this Obsidian runtime.");
+	}
+
+	const childProcess = requireModule("child_process");
+	const fs = requireModule("fs");
+	const path = requireModule("path");
+	const os = requireModule("os");
+	const crypto = requireModule("crypto");
+
+	if (
+		!childProcess.spawn ||
+		!fs.existsSync ||
+		!fs.mkdirSync ||
+		!fs.readFileSync ||
+		!fs.writeFileSync ||
+		!path.join ||
+		!os.tmpdir ||
+		!crypto.createHash
+	) {
+		throw new Error("Required Node runtime APIs are unavailable in this Obsidian runtime.");
+	}
+
+	return {
+		childProcess,
+		fs: fs as RuntimeModules["fs"],
+		path: path as RuntimeModules["path"],
+		os: os as RuntimeModules["os"],
+		crypto: crypto as RuntimeModules["crypto"],
+	};
+}
+
+function writeBridgeSourceToTemp(modules: RuntimeModules, providerType: string, source: string): string {
+	const hash = modules.crypto.createHash("sha256").update(source).digest("hex").slice(0, 16);
+	const tempDir = modules.path.join(modules.os.tmpdir(), "obsidian-ai-chat-sidebar");
+	const bridgePath = modules.path.join(tempDir, `${providerType}-${hash}.mjs`);
+	modules.fs.mkdirSync(tempDir, { recursive: true });
+	const currentSource = modules.fs.existsSync(bridgePath) ? modules.fs.readFileSync(bridgePath, "utf8") : "";
+	if (currentSource !== source) {
+		modules.fs.writeFileSync(bridgePath, source, "utf8");
+	}
+	return bridgePath;
+}
+
 export abstract class BaseBridge {
 	protected plugin: Plugin;
 	protected seq = 0;
@@ -81,9 +176,9 @@ export abstract class BaseBridge {
 	}
 
 	/**
-	 * Get the filesystem path to the bridge script
+	 * Get the bridge script source.
 	 */
-	abstract getBridgePath(basePath: string): string;
+	abstract getBridgeSource(): string;
 
 	/**
 	 * Get the provider type identifier (e.g., "claude", "chatgpt", "copilot")
@@ -238,43 +333,16 @@ export abstract class BaseBridge {
 		piAuth?: PiAuth,
 		handlers: BridgeStreamHandlers = {}
 	): Promise<Record<string, unknown> | undefined> {
-		const adapterWithBasePath = this.plugin.app.vault.adapter as unknown as { getBasePath?: () => string };
-		const basePath = adapterWithBasePath.getBasePath?.();
-		if (!basePath) {
-			throw new Error("Cannot resolve local vault base path for bridge.");
-		}
-
-		const bridgePath = this.getBridgePath(basePath);
-
-		// Get child_process via window.require (Obsidian Electron context)
+		// Get Node modules via window.require (Obsidian Electron context)
 		const win = window as unknown as {
-			require?: (name: string) => unknown;
+			require?: NodeRequire;
 			process?: { env?: Record<string, string | undefined> };
 		};
 
-		const childProcessModule = win.require?.("child_process") as
-			| {
-				execSync?: (command: string, options: { encoding: string; shell?: boolean }) => Buffer | string;
-				spawn?: (
-					command: string,
-					args: string[],
-					options: {
-						shell: boolean;
-						cwd?: string;
-						env: Record<string, string>;
-						stdio: ["pipe", "pipe", "pipe"];
-					}
-				) => {
-					stdout: { on: (event: "data", cb: (chunk: string) => void) => void };
-					stderr: { on: (event: "data", cb: (chunk: string) => void) => void };
-					stdin: { write: (data: string) => void; end: () => void };
-					on: (event: string, cb: (...args: unknown[]) => void) => void;
-					kill: () => void;
-				};
-			}
-		| undefined;
+		const runtimeModules = loadRuntimeModules(win.require);
+		const childProcessModule = runtimeModules.childProcess;
 
-		if (!childProcessModule?.spawn) {
+		if (!childProcessModule.spawn) {
 			throw new Error("child_process.spawn is unavailable in this Obsidian runtime.");
 		}
 
@@ -295,6 +363,7 @@ export abstract class BaseBridge {
 		}
 		mergedEnv["OBSIDIAN_AI_NODE_PATH"] = nodePath;
 
+		const bridgePath = writeBridgeSourceToTemp(runtimeModules, this.getProviderType(), this.getBridgeSource());
 		const spawned = childProcessModule.spawn(nodePath, [bridgePath], {
 			shell: false,
 			cwd: params.cwd,

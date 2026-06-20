@@ -120,7 +120,7 @@ export class OnboardingModal extends Modal {
 		input.focus();
 
 		const errorEl = host.createDiv({ cls: "auth-card-error" });
-		errorEl.style.display = "none";
+		errorEl.addClass("claude-chat-hidden");
 
 		const footer = this.contentEl.createDiv({ cls: "onboarding-footer" });
 		const saveBtn = footer.createEl("button", { cls: "onboarding-btn onboarding-btn--primary", text: "Save" });
@@ -129,7 +129,7 @@ export class OnboardingModal extends Modal {
 			const key = input.value.trim();
 			if (!key.startsWith("sk-")) {
 				errorEl.setText("API keys start with sk-ant-api03-…");
-				errorEl.style.display = "block";
+				errorEl.removeClass("claude-chat-hidden");
 				return;
 			}
 			this.plugin.settings.anthropicApiKey = key;
@@ -145,7 +145,7 @@ export class OnboardingModal extends Modal {
 	private renderClaudeMaxFlow(host: HTMLElement): void {
 		// Create a dummy input element for AuthCardView (it won't actually hide anything in the modal)
 		const dummy = host.createDiv();
-		dummy.style.display = "none";
+		dummy.addClass("claude-chat-hidden");
 		this.authCardView = new AuthCardView(host, dummy);
 
 		const coordinator = new ClaudeMaxLoginCoordinator(this.plugin);
@@ -190,7 +190,7 @@ export class OnboardingModal extends Modal {
 
 	private renderChatGptFlow(host: HTMLElement): void {
 		const dummy = host.createDiv();
-		dummy.style.display = "none";
+		dummy.addClass("claude-chat-hidden");
 		this.authCardView = new AuthCardView(host, dummy);
 
 		const TIMEOUT_MS = 5 * 60 * 1000;

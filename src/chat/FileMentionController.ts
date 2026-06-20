@@ -99,12 +99,12 @@ export class FileMentionController {
 		this.selectedIndex = 0;
 		this.isActive = true;
 		this.renderDropdown();
-		this.dropdownEl.style.display = "block";
+		this.dropdownEl.removeClass("claude-chat-hidden");
 	}
 
 	private close(): void {
 		this.isActive = false;
-		this.dropdownEl.style.display = "none";
+		this.dropdownEl.addClass("claude-chat-hidden");
 		this.dropdownEl.empty();
 	}
 
@@ -184,11 +184,11 @@ export class FileMentionController {
 		this.chipsEl.empty();
 
 		if (mentions.files.length === 0) {
-			this.chipsEl.style.display = "none";
+			this.chipsEl.addClass("claude-chat-hidden");
 			return;
 		}
 
-		this.chipsEl.style.display = "flex";
+		this.chipsEl.removeClass("claude-chat-hidden");
 
 		mentions.files.forEach((filePath) => {
 			const chip = this.chipsEl.createDiv({ cls: "claude-chat-mention-chip" });

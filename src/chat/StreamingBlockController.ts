@@ -50,7 +50,7 @@ export class StreamingBlockController {
 		});
 
 		this.assistantTextEl = bubble.createDiv({ cls: "claude-chat-bubble-text" });
-		this.assistantTextEl.style.display = "none";
+		this.assistantTextEl.addClass("claude-chat-hidden");
 
 		this.scrollToBottom();
 	}

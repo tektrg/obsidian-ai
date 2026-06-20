@@ -1,4 +1,4 @@
-import { Notice } from "obsidian";
+import { Notice, requestUrl } from "obsidian";
 import { AuthProvider, AuthSession } from "./types";
 import { CHATGPT_OAUTH_CONFIG } from "./ChatGptOAuthConfig";
 import { createCallbackServer } from "./CallbackServer";
@@ -233,7 +233,8 @@ export class ChatGptProvider implements AuthProvider {
 			code_verifier: pending.codeVerifier,
 		});
 
-		const response = await fetch(CHATGPT_OAUTH_CONFIG.TOKEN_URL, {
+		const response = await requestUrl({
+			url: CHATGPT_OAUTH_CONFIG.TOKEN_URL,
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -242,12 +243,12 @@ export class ChatGptProvider implements AuthProvider {
 			body: params.toString(),
 		});
 
-		if (!response.ok) {
-			const errorText = await response.text();
+		if (response.status < 200 || response.status >= 300) {
+			const errorText = response.text;
 			throw new Error(`Token exchange failed: ${response.status} - ${errorText}`);
 		}
 
-		return await response.json();
+		return response.json as OAuthTokenResponse;
 	}
 
 	/**
@@ -281,7 +282,8 @@ export class ChatGptProvider implements AuthProvider {
 			refresh_token: refreshToken,
 		});
 
-		const response = await fetch(CHATGPT_OAUTH_CONFIG.TOKEN_URL, {
+		const response = await requestUrl({
+			url: CHATGPT_OAUTH_CONFIG.TOKEN_URL,
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -290,8 +292,8 @@ export class ChatGptProvider implements AuthProvider {
 			body: params.toString(),
 		});
 
-		if (!response.ok) {
-			const errorText = await response.text();
+		if (response.status < 200 || response.status >= 300) {
+			const errorText = response.text;
 			// Check if refresh token is invalid
 			if (response.status === 400 || response.status === 401) {
 				throw new Error("Refresh token invalid or revoked");
@@ -299,7 +301,7 @@ export class ChatGptProvider implements AuthProvider {
 			throw new Error(`Token refresh failed: ${response.status} - ${errorText}`);
 		}
 
-		const data = await response.json();
+		const data = response.json as OAuthTokenResponse;
 		this.persistTokens({
 			access_token: data.access_token,
 			refresh_token: data.refresh_token || refreshToken,
