@@ -1,6 +1,6 @@
 import { Plugin } from "obsidian";
 import { BaseBridge } from "./BaseBridge";
-import { installClaudeBridge } from "./ClaudeBridgeInstaller";
+import { getClaudeBridgeSource } from "./BridgeSources";
 import { BridgeCapabilities, ChatParams } from "./types";
 
 /**
@@ -19,8 +19,8 @@ export class ClaudeSdkBridge extends BaseBridge {
 		super(plugin);
 	}
 
-	getBridgePath(basePath: string): string {
-		return installClaudeBridge(this.plugin, basePath);
+	getBridgeSource(): string {
+		return getClaudeBridgeSource();
 	}
 
 	getProviderType(): string {

@@ -2,20 +2,14 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import process from "node:process";
 
-const DEBUG_LOG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "bridge-debug.log");
 const DEBUG_LOG_ENABLED = process.env.OBSIDIAN_AI_DEBUG_BRIDGE === "1";
-const CLAUDE_CODE_CLI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "claude-code-cli.js");
+const CLAUDE_CODE_EXECUTABLE = process.env.OBSIDIAN_AI_CLAUDE_CODE_PATH || "claude";
 function debugLog(...parts) {
 	if (!DEBUG_LOG_ENABLED) return;
-	try {
-		const stamp = new Date().toISOString();
-		fs.appendFileSync(DEBUG_LOG_PATH, `${stamp} ${parts.join(" ")}\n`);
-	} catch {
-		// logging must never break the bridge
-	}
+	const stamp = new Date().toISOString();
+	process.stderr.write(`${stamp} ${parts.join(" ")}\n`);
 }
 
 function respond(message) {
@@ -257,11 +251,11 @@ async function runChat(id, payload) {
 
 	const buildQueryOptions = (sessionToResume) => {
 		const options = {
-			model,
-			cwd,
-			executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
-			pathToClaudeCodeExecutable: CLAUDE_CODE_CLI_PATH,
-			maxTurns: 8,
+				model,
+				cwd,
+				executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
+				pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE,
+				maxTurns: 8,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
 			includePartialMessages: true,

@@ -1,7 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "node:module";
-import { readFile } from "node:fs/promises";
 
 const banner =
 	`/*
@@ -15,7 +14,7 @@ const prod = process.argv[2] === "production";
 const runtimeSourcePlugin = {
 	name: "runtime-source",
 	setup(build) {
-		build.onResolve({ filter: /^virtual:(claude-chat-bridge-source|pi-agent-bridge-source|claude-code-cli-source)$/ }, (args) => ({
+		build.onResolve({ filter: /^virtual:(claude-chat-bridge-source|pi-agent-bridge-source)$/ }, (args) => ({
 			path: args.path,
 			namespace: "runtime-source",
 		}));
@@ -52,13 +51,6 @@ const runtimeSourcePlugin = {
 			};
 		});
 
-		build.onLoad({ filter: /^virtual:claude-code-cli-source$/, namespace: "runtime-source" }, async () => {
-			const cliSource = await readFile("node_modules/@anthropic-ai/claude-agent-sdk/cli.js", "utf8");
-			return {
-				contents: `export default ${JSON.stringify(cliSource)};`,
-				loader: "js",
-			};
-		});
 	},
 };
 

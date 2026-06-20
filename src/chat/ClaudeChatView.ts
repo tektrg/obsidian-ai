@@ -97,7 +97,7 @@ export class ClaudeChatView extends ItemView {
 		menuBtn.addEventListener("click", () => this.toggleSettingsPanel());
 
 		this.settingsPanelEl = shellEl.createDiv({ cls: "claude-chat-settings-panel" });
-		this.settingsPanelEl.style.display = "none";
+		this.settingsPanelEl.addClass("claude-chat-hidden");
 		this.renderSettingsPanel();
 
 		this.threadEl = shellEl.createDiv({ cls: "claude-chat-thread" });
@@ -131,14 +131,14 @@ export class ClaudeChatView extends ItemView {
 		this.renderModelPicker();
 
 		const mentionChipsEl = composerEl.createDiv({ cls: "claude-chat-mention-chips" });
-		mentionChipsEl.style.display = "none";
+		mentionChipsEl.addClass("claude-chat-hidden");
 
 		const promptContainer = composerEl.createDiv({ cls: "claude-chat-prompt-container" });
 		this.promptContainerEl = promptContainer;
 		this.authCardView = new AuthCardView(composerEl, promptContainer);
 
 		const mentionDropdownEl = promptContainer.createDiv({ cls: "claude-chat-mention-dropdown" });
-		mentionDropdownEl.style.display = "none";
+		mentionDropdownEl.addClass("claude-chat-hidden");
 
 		this.promptInputEl = promptContainer.createEl("textarea", { cls: "claude-chat-prompt" });
 		this.promptInputEl.placeholder = "Ask Claude to improve, summarize, or edit your current note... Type @ to mention files";
@@ -174,9 +174,9 @@ export class ClaudeChatView extends ItemView {
 
 	private adjustTextareaHeight(): void {
 		if (!this.promptInputEl) return;
-		this.promptInputEl.style.height = "auto";
+		this.promptInputEl.setCssStyles({ height: "auto" });
 		const newHeight = Math.min(this.promptInputEl.scrollHeight, 220);
-		this.promptInputEl.style.height = `${newHeight}px`;
+		this.promptInputEl.setCssStyles({ height: `${newHeight}px` });
 	}
 
 	private handleInput(): void {
@@ -428,8 +428,8 @@ export class ClaudeChatView extends ItemView {
 
 	private toggleSettingsPanel(): void {
 		if (!this.settingsPanelEl) return;
-		const isVisible = this.settingsPanelEl.style.display !== "none";
-		this.settingsPanelEl.style.display = isVisible ? "none" : "flex";
+		const isVisible = !this.settingsPanelEl.hasClass("claude-chat-hidden");
+		this.settingsPanelEl.toggleClass("claude-chat-hidden", isVisible);
 		if (!isVisible) this.renderSettingsPanel();
 	}
 

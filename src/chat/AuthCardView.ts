@@ -105,7 +105,7 @@ export class AuthCardView {
 		input.focus();
 
 		const errorEl = card.createDiv({ cls: "auth-card-error" });
-		errorEl.style.display = "none";
+		errorEl.addClass("claude-chat-hidden");
 
 		const actions = card.createDiv({ cls: "auth-card-actions" });
 
@@ -121,12 +121,12 @@ export class AuthCardView {
 			const url = input.value.trim();
 			if (!url) {
 				errorEl.setText("Please paste the callback URL first.");
-				errorEl.style.display = "block";
+				errorEl.removeClass("claude-chat-hidden");
 				return;
 			}
 			confirmBtn.disabled = true;
 			confirmBtn.textContent = "Signing in…";
-			errorEl.style.display = "none";
+			errorEl.addClass("claude-chat-hidden");
 			try {
 				await onConfirm(url);
 			} catch (err) {
@@ -136,7 +136,7 @@ export class AuthCardView {
 					msg.toLowerCase().includes("invalid_grant") ||
 					msg.toLowerCase().includes("invalid state");
 				errorEl.setText(isExpired ? `${msg} — start a fresh flow below.` : msg);
-				errorEl.style.display = "block";
+				errorEl.removeClass("claude-chat-hidden");
 				confirmBtn.disabled = false;
 				confirmBtn.textContent = "Confirm";
 				// Show Start over button for unrecoverable PKCE errors
