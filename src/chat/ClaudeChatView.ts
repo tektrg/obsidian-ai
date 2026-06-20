@@ -47,7 +47,7 @@ export class ClaudeChatView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return "Claude chat";
+		return "AI chat";
 	}
 
 	getIcon(): string {
@@ -76,7 +76,7 @@ export class ClaudeChatView extends ItemView {
 
 		const headerEl = shellEl.createDiv({ cls: "claude-chat-header" });
 		const titleWrap = headerEl.createDiv({ cls: "claude-chat-header-title-wrap" });
-		titleWrap.createEl("h3", { text: "Claude chat", cls: "claude-chat-title" });
+		titleWrap.createEl("h3", { text: "AI chat", cls: "claude-chat-title" });
 		this.statusEl = titleWrap.createEl("div", { cls: "claude-chat-status" });
 		this.renderStatus(this.plugin.getChatAuthSession());
 
