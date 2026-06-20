@@ -1,10 +1,10 @@
-# Claude Chat plugin
+# AI Chat Sidebar plugin
 
 ## Project overview
 
 - Target: Obsidian Community Plugin (TypeScript → bundled JavaScript).
-- Plugin ID: `claude-chat`
-- Purpose: standalone Claude chat panel for Obsidian with:
+- Plugin ID: `ai-chat-sidebar`
+- Purpose: standalone AI chat sidebar for Obsidian with:
   - Claude Max OAuth flow
   - Anthropic API key fallback
   - Claude SDK bridge process for Claude Max chat execution
@@ -19,8 +19,8 @@
 
 This workspace now has two separate plugins:
 
-1. `claude-chat`
-   - owns Claude chat UI
+1. `ai-chat-sidebar`
+   - owns AI chat sidebar UI
    - owns Claude auth state
    - owns Claude SDK bridge integration
 
@@ -28,9 +28,9 @@ This workspace now has two separate plugins:
    - owns reader mode
    - owns highlights
    - owns reading progress
-   - should not contain Claude chat/auth code anymore
+   - should not contain AI chat/auth code anymore
 
-When debugging chat/auth issues, work in **`claude-chat`**, not the reader plugin.
+When debugging chat/auth issues, work in **`ai-chat-sidebar`**, not the reader plugin.
 
 ## Active local dev target
 
@@ -38,7 +38,7 @@ The active local Obsidian vault for development is:
 - `<DEV_VAULT_PATH>`
 
 The plugin is exposed to Obsidian via symlink here:
-- `<DEV_VAULT_PATH>/.obsidian/plugins/claude-chat`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar`
 
 That symlink points to the source project here:
 - `<PLUGIN_SOURCE_PATH>`
@@ -72,7 +72,7 @@ For the best development experience, use **Hot-Reload** plugin + symlink setup.
 ### Symlink structure
 The plugin folder in the test vault is symlinked to the source project:
 ```
-<DEV_VAULT_PATH>/.obsidian/plugins/claude-chat
+<DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar
     → <PLUGIN_SOURCE_PATH>
 ```
 
@@ -93,18 +93,18 @@ This means:
 ### Dev server in tmux
 Run the dev server in a detached tmux session:
 ```bash
-tmux new-session -d -s claude-chat-dev "npm run dev"
+tmux new-session -d -s ai-chat-sidebar-dev "npm run dev"
 ```
 
 **Manage session:**
 ```bash
 # View output
-tmux attach -t claude-chat-dev
+tmux attach -t ai-chat-sidebar-dev
 
 # Detach (Ctrl+B, then D)
 
 # Stop server
-tmux kill-session -t claude-chat-dev
+tmux kill-session -t ai-chat-sidebar-dev
 ```
 
 ### Panel persistence fix
@@ -126,7 +126,7 @@ This project uses a **symlink-based deployment** for development:
 
 **Symlink:**
 ```
-<DEV_VAULT_PATH>/.obsidian/plugins/claude-chat
+<DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar
     → <PLUGIN_SOURCE_PATH>
 ```
 
@@ -145,7 +145,7 @@ Claude Max bridge file must exist at:
 - `scripts/claude-chat-bridge.mjs`
 
 The bridge resolver in `src/chat/ClaudeSdkBridge.ts` expects the installed plugin path:
-- `<vault>/.obsidian/plugins/claude-chat/scripts/claude-chat-bridge.mjs`
+- `<vault>/.obsidian/plugins/ai-chat-sidebar/scripts/claude-chat-bridge.mjs`
 
 ## Important source files
 
@@ -176,7 +176,7 @@ The bridge resolver in `src/chat/ClaudeSdkBridge.ts` expects the installed plugi
 Obsidian stores plugin data under the plugin ID namespace.
 
 For the active local vault, plugin state is here:
-- `<DEV_VAULT_PATH>/.obsidian/plugins/claude-chat/data.json`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar/data.json`
 
 This may contain:
 - `authMode`
@@ -216,19 +216,19 @@ tmux capture-pane -pt ai-build:0 -S -200
 
 ### Inspect plugin state in tmux
 ```bash
-tmux new-session -d -s ai-state 'cat <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat/data.json'
+tmux new-session -d -s ai-state 'cat <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar/data.json'
 tmux capture-pane -pt ai-state:0 -S -200
 ```
 
 ### Verify bridge script exists in installed path
 ```bash
-tmux new-session -d -s ai-bridge 'ls -la <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat/scripts'
+tmux new-session -d -s ai-bridge 'ls -la <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar/scripts'
 tmux capture-pane -pt ai-bridge:0 -S -200
 ```
 
 ### Inspect symlink target
 ```bash
-tmux new-session -d -s ai-link 'ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat'
+tmux new-session -d -s ai-link 'ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar'
 tmux capture-pane -pt ai-link:0 -S -50
 ```
 
@@ -243,7 +243,7 @@ Check:
 
 Useful checks:
 ```bash
-ls -la <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat
+ls -la <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar
 ls -la <PLUGIN_SOURCE_PATH>
 ```
 
@@ -259,14 +259,14 @@ Then reload Obsidian and re-open command palette.
 Check in this order:
 1. `data.json` contains OAuth token fields
 2. bridge file exists at installed path
-3. `ClaudeSdkBridge.ts` path matches plugin ID `claude-chat`
+3. `ClaudeSdkBridge.ts` path matches plugin ID `ai-chat-sidebar`
 4. model name is valid
 5. Obsidian runtime can spawn `child_process`
 
 Relevant files:
 - `src/chat/ClaudeSdkBridge.ts`
 - `scripts/claude-chat-bridge.mjs`
-- `<DEV_VAULT_PATH>/.obsidian/plugins/claude-chat/data.json`
+- `<DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar/data.json`
 
 ### 4. Claude Max sign-in does not complete
 Check:
@@ -295,8 +295,8 @@ This usually means one of these:
 
 Check:
 ```bash
-ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat
-ls -la <DEV_VAULT_PATH>/.obsidian/plugins/claude-chat/scripts
+ls -ld <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar
+ls -la <DEV_VAULT_PATH>/.obsidian/plugins/ai-chat-sidebar/scripts
 ```
 
 ### 7. esbuild platform mismatch
@@ -317,9 +317,9 @@ npm run build
 After changes, verify:
 1. `npm run build`
 2. enable/reload plugin in Obsidian
-3. run `Claude chat: Open panel`
+3. run `AI Chat Sidebar: Open chat panel`
 4. sign in if needed
-5. run `Claude chat: Test connection`
+5. run `AI Chat Sidebar: Test connection`
 6. send `hi`
 
 ## Coding expectations
@@ -334,7 +334,7 @@ After changes, verify:
 ## Future improvements
 
 Likely next improvements:
-- add dedicated debug log file and command for `claude-chat`
+- add dedicated debug log file and command for `ai-chat-sidebar`
 - add import/migration from old reader plugin auth state
 - add better bridge stderr/stdout surfacing in UI
 - remove stale files if any old bridge/script filenames remain

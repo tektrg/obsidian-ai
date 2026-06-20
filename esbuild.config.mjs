@@ -12,17 +12,17 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
-const claudeRuntimeSourcePlugin = {
-	name: "claude-runtime-source",
+const runtimeSourcePlugin = {
+	name: "runtime-source",
 	setup(build) {
-		build.onResolve({ filter: /^virtual:(claude-chat-bridge-source|claude-code-cli-source)$/ }, (args) => ({
+		build.onResolve({ filter: /^virtual:(claude-chat-bridge-source|pi-agent-bridge-source|claude-code-cli-source)$/ }, (args) => ({
 			path: args.path,
-			namespace: "claude-runtime-source",
+			namespace: "runtime-source",
 		}));
 
-		build.onLoad({ filter: /^virtual:claude-chat-bridge-source$/, namespace: "claude-runtime-source" }, async () => {
+		const buildBridgeSource = async (entryPoint, displayName) => {
 			const bridgeBundle = await esbuild.build({
-				entryPoints: ["scripts/claude-chat-bridge.mjs"],
+				entryPoints: [entryPoint],
 				bundle: true,
 				platform: "node",
 				format: "esm",
@@ -31,19 +31,28 @@ const claudeRuntimeSourcePlugin = {
 				minify: prod,
 				external: builtinModules.flatMap((moduleName) => [moduleName, `node:${moduleName}`]),
 			});
-
 			const bridgeSource = bridgeBundle.outputFiles[0]?.text;
 			if (!bridgeSource) {
-				throw new Error("Failed to bundle Claude bridge source.");
+				throw new Error(`Failed to bundle ${displayName} source.`);
 			}
+			return bridgeSource;
+		};
 
+		build.onLoad({ filter: /^virtual:claude-chat-bridge-source$/, namespace: "runtime-source" }, async () => {
 			return {
-				contents: `export default ${JSON.stringify(bridgeSource)};`,
+				contents: `export default ${JSON.stringify(await buildBridgeSource("scripts/claude-chat-bridge.mjs", "Claude bridge"))};`,
 				loader: "js",
 			};
 		});
 
-		build.onLoad({ filter: /^virtual:claude-code-cli-source$/, namespace: "claude-runtime-source" }, async () => {
+		build.onLoad({ filter: /^virtual:pi-agent-bridge-source$/, namespace: "runtime-source" }, async () => {
+			return {
+				contents: `export default ${JSON.stringify(await buildBridgeSource("scripts/pi-agent-bridge.mjs", "Pi bridge"))};`,
+				loader: "js",
+			};
+		});
+
+		build.onLoad({ filter: /^virtual:claude-code-cli-source$/, namespace: "runtime-source" }, async () => {
 			const cliSource = await readFile("node_modules/@anthropic-ai/claude-agent-sdk/cli.js", "utf8");
 			return {
 				contents: `export default ${JSON.stringify(cliSource)};`,
@@ -55,7 +64,7 @@ const claudeRuntimeSourcePlugin = {
 
 // Using symlink for hot reload:
 // The test vault plugin folder can be symlinked to this project root:
-// <vault>/.obsidian/plugins/claude-chat -> <plugin-source>
+// <vault>/.obsidian/plugins/ai-chat-sidebar -> <plugin-source>
 // When you run `npm run dev`, changes are built to main.js in this folder,
 // and Obsidian can hot-reload through the symlink.
 
@@ -88,7 +97,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
-	plugins: [claudeRuntimeSourcePlugin],
+	plugins: [runtimeSourcePlugin],
 });
 
 if (prod) {

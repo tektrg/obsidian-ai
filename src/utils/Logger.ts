@@ -6,7 +6,7 @@ export class Logger {
 	private logFile: string;
 	private maxLines: number;
 
-	constructor(logFile: string = ".obsidian/plugins/claude-chat/debug.log", maxLines: number = 1000) {
+	constructor(logFile: string = ".obsidian/plugins/ai-chat-sidebar/debug.log", maxLines: number = 1000) {
 		this.logFile = logFile;
 		this.maxLines = maxLines;
 	}
@@ -19,7 +19,7 @@ export class Logger {
 
 			// In Obsidian, we can't easily write files without the app
 			// So we'll use console and also try to accumulate in memory if needed
-			console.log(`[ClaudeAI] ${message}`, data || "");
+			console.log(`[AIChatSidebar] ${message}`, data || "");
 		} catch (e) {
 			// Silent fail
 		}

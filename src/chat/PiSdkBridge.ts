@@ -1,6 +1,7 @@
 import { Plugin } from "obsidian";
 import { BaseBridge } from "./BaseBridge";
-import { BridgeCapabilities, ChatParams, PiAuth, BridgeStreamHandlers, ChatResult, BridgeStreamEvent } from "./types";
+import { installPiBridge } from "./ClaudeBridgeInstaller";
+import { BridgeCapabilities, ChatParams, PiAuth, BridgeStreamHandlers, ChatResult } from "./types";
 
 /**
  * Pi SDK Bridge - Subprocess client for @mariozechner/pi-coding-agent
@@ -23,22 +24,12 @@ import { BridgeCapabilities, ChatParams, PiAuth, BridgeStreamHandlers, ChatResul
  */
 
 export class PiSdkBridge extends BaseBridge {
-	private static isPiSdkAvailable(): boolean {
-		try {
-			// Check if Pi SDK is available
-			require("@mariozechner/pi-coding-agent");
-			return true;
-		} catch {
-			return false;
-		}
-	}
-
 	constructor(plugin: Plugin) {
 		super(plugin);
 	}
 
 	getBridgePath(basePath: string): string {
-		return `${basePath}/${this.plugin.app.vault.configDir}/plugins/${this.plugin.manifest.id}/scripts/pi-agent-bridge.mjs`;
+		return installPiBridge(this.plugin, basePath);
 	}
 
 	getProviderType(): string {
@@ -89,7 +80,7 @@ export class PiSdkBridge extends BaseBridge {
 	/**
 	 * Stream events with Pi auth
 	 */
-	async *streamEvents(params: ChatParams, piAuth?: PiAuth): AsyncGenerator<BridgeStreamEvent> {
+	async *streamEvents(params: ChatParams, piAuth?: PiAuth) {
 		this.ensurePiSdkAvailable();
 		if (!piAuth) {
 			throw new Error("Pi SDK bridge requires piAuth credentials");

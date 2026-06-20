@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile } from "obsidian";
+import { Notice, Plugin } from "obsidian";
 import { AuthController } from "./auth/AuthController";
 import type { AuthMode, AuthSession } from "./auth/types";
 import { BridgeFactory } from "./chat/BridgeFactory";
@@ -57,32 +57,32 @@ export default class ObsidianAiPlugin extends Plugin {
 		this.addSettingTab(new ObsidianAiSettingTab(this.app, this));
 
 		this.addCommand({
-			id: "claude-chat-open-panel",
-			name: "Claude chat: Open panel",
+			id: "open-panel",
+			name: "Open chat panel",
 			callback: () => {
 				void this.activateChatView();
 			}
 		});
 
 		this.addCommand({
-			id: "claude-chat-sign-in",
-			name: "Claude chat: Sign in",
+			id: "sign-in",
+			name: "Sign in",
 			callback: () => {
 				void this.startChatLogin();
 			}
 		});
 
 		this.addCommand({
-			id: "claude-chat-test-connection",
-			name: "Claude chat: Test connection",
+			id: "test-connection",
+			name: "Test connection",
 			callback: () => {
 				void this.testChatConnection();
 			}
 		});
 
 		this.addCommand({
-			id: "claude-chat-new-conversation",
-			name: "Claude chat: New conversation",
+			id: "new-conversation",
+			name: "New conversation",
 			callback: () => {
 				const leaves = this.app.workspace.getLeavesOfType(CLAUDE_CHAT_VIEW_TYPE);
 				for (const leaf of leaves) {
@@ -115,7 +115,7 @@ export default class ObsidianAiPlugin extends Plugin {
 		);
 	}
 
-	async onunload() {
+	onunload() {
 		BridgeFactory.clearCache();
 		// Don't detach leaves here - let the workspace layout persist across reloads
 		// The views will be reconnected when the plugin reloads
