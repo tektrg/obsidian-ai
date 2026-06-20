@@ -1,9 +1,9 @@
 {
 	"id": "ai-chat-sidebar",
 	"name": "AI Chat Sidebar",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"minAppVersion": "0.15.0",
-	"description": "AI chat sidebar for Obsidian with Claude Max OAuth, Anthropic API key, and ChatGPT Plus/Codex support.",
+	"description": "Chat sidebar with Claude Max OAuth, Anthropic API keys, and ChatGPT Plus/Codex support.",
 	"author": "Antigravity",
 	"isDesktopOnly": true
 }
