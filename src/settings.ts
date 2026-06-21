@@ -157,7 +157,7 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 			.setName("Claude OAuth code")
 			.setDesc("Paste the full callback URL or code=... after clicking Sign in in the chat panel.")
 			.addTextArea((text) => text
-				.setPlaceholder("https://console.anthropic.com/oauth/code/callback?code=...")
+				.setPlaceholder("https://platform.claude.com/oauth/code/callback?code=...")
 				.setValue(this.plugin.settings.claudeOauthAuthorizationCode)
 				.onChange(async (value) => {
 					this.plugin.settings.claudeOauthAuthorizationCode = value.trim();

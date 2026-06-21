@@ -1,4 +1,5 @@
 import { Notice, requestUrl } from "obsidian";
+import { CLAUDE_OAUTH_CONFIG } from "./ClaudeOAuthConfig";
 import { AuthProvider, AuthSession } from "./types";
 
 interface ClaudeOauthStore {
@@ -48,14 +49,6 @@ class OAuthTokenRequestError extends Error {
 		}
 	}
 }
-
-const CLAUDE_OAUTH_CONFIG = {
-	clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-	authUrl: "https://claude.ai/oauth/authorize",
-	tokenUrl: "https://platform.claude.com/v1/oauth/token",
-	redirectUri: "https://console.anthropic.com/oauth/code/callback",
-	scopes: "org:create_api_key user:profile user:inference"
-} as const;
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;

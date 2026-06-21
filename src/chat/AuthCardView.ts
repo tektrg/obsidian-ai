@@ -99,7 +99,7 @@ export class AuthCardView {
 			cls: "auth-card-input",
 			attr: {
 				type: "text",
-				placeholder: "https://console.anthropic.com/oauth/code/callback?code=…",
+				placeholder: "https://platform.claude.com/oauth/code/callback?code=...",
 			},
 		});
 		input.focus();

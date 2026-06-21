@@ -1,4 +1,5 @@
 import type ObsidianAiPlugin from "../main";
+import { CLAUDE_OAUTH_CONFIG } from "./ClaudeOAuthConfig";
 import type { AuthSession } from "./types";
 
 export interface ClaudeMaxLoginCallbacks {
@@ -46,15 +47,15 @@ export class ClaudeMaxLoginCoordinator {
 		const codeChallenge = await this.sha256Base64Url(verifier);
 		const params = new URLSearchParams({
 			code: "true",
-			client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+			client_id: CLAUDE_OAUTH_CONFIG.clientId,
 			response_type: "code",
-			redirect_uri: "https://console.anthropic.com/oauth/code/callback",
-			scope: "org:create_api_key user:profile user:inference",
+			redirect_uri: CLAUDE_OAUTH_CONFIG.redirectUri,
+			scope: CLAUDE_OAUTH_CONFIG.scopes,
 			code_challenge: codeChallenge,
 			code_challenge_method: "S256",
 			state,
 		});
-		window.open(`https://claude.ai/oauth/authorize?${params.toString()}`, "_blank");
+		window.open(`${CLAUDE_OAUTH_CONFIG.authUrl}?${params.toString()}`, "_blank");
 	}
 
 	cancel(): void {
