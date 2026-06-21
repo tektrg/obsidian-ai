@@ -163,7 +163,7 @@
 }
 
 .claude-chat-hidden {
-	display: none;
+	display: none !important;
 }
 
 .claude-chat-bubble-text {
