@@ -5,7 +5,51 @@ import path from "node:path";
 import process from "node:process";
 
 const DEBUG_LOG_ENABLED = process.env.OBSIDIAN_AI_DEBUG_BRIDGE === "1";
-const CLAUDE_CODE_EXECUTABLE = process.env.OBSIDIAN_AI_CLAUDE_CODE_PATH || "claude";
+const CLAUDE_EXECUTABLE_NAME = "claude";
+const CLAUDE_CODE_EXECUTABLE = resolveClaudeCodeExecutable();
+
+function isExecutableFile(filePath) {
+	if (!filePath) return false;
+	try {
+		fs.accessSync(filePath, fs.constants.X_OK);
+		return fs.statSync(filePath).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function uniqueStrings(values) {
+	return [...new Set(values.filter(Boolean))];
+}
+
+function resolveClaudeCodeExecutable() {
+	const configuredPath = process.env.OBSIDIAN_AI_CLAUDE_CODE_PATH?.trim();
+	if (configuredPath) {
+		return configuredPath;
+	}
+
+	const pathCandidates = String(process.env.PATH || "")
+		.split(path.delimiter)
+		.filter(Boolean)
+		.map((dir) => path.join(dir, CLAUDE_EXECUTABLE_NAME));
+
+	const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+	const commonCandidates = [
+		homeDir ? path.join(homeDir, ".local", "bin", CLAUDE_EXECUTABLE_NAME) : "",
+		"/opt/homebrew/bin/claude",
+		"/usr/local/bin/claude",
+		"/usr/bin/claude",
+	];
+
+	for (const candidate of uniqueStrings([...pathCandidates, ...commonCandidates])) {
+		if (isExecutableFile(candidate)) {
+			return candidate;
+		}
+	}
+
+	return CLAUDE_EXECUTABLE_NAME;
+}
+
 function debugLog(...parts) {
 	if (!DEBUG_LOG_ENABLED) return;
 	const stamp = new Date().toISOString();
