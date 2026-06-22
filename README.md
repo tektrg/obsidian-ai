@@ -2,6 +2,10 @@
 
 AI Chat Sidebar is a desktop-only Obsidian plugin that adds an AI chat sidebar with Claude Max OAuth support, an Anthropic API key fallback, and optional ChatGPT Plus/Codex support.
 
+## Demo
+
+![AI Chat Sidebar demo](assets/demo.gif)
+
 ## Features
 
 - AI chat sidebar inside Obsidian
