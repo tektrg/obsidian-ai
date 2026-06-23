@@ -7,6 +7,9 @@ import process from "node:process";
 const DEBUG_LOG_ENABLED = process.env.OBSIDIAN_AI_DEBUG_BRIDGE === "1";
 const CLAUDE_EXECUTABLE_NAME = "claude";
 const CLAUDE_CODE_EXECUTABLE = resolveClaudeCodeExecutable();
+const DEFAULT_MAX_TURNS = 100;
+const MIN_MAX_TURNS = 1;
+const MAX_MAX_TURNS = 500;
 
 function isExecutableFile(filePath) {
 	if (!filePath) return false;
@@ -54,6 +57,12 @@ function debugLog(...parts) {
 	if (!DEBUG_LOG_ENABLED) return;
 	const stamp = new Date().toISOString();
 	process.stderr.write(`${stamp} ${parts.join(" ")}\n`);
+}
+
+function normalizeMaxTurns(value) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) return DEFAULT_MAX_TURNS;
+	return Math.min(MAX_MAX_TURNS, Math.max(MIN_MAX_TURNS, Math.floor(parsed)));
 }
 
 function respond(message) {
@@ -278,6 +287,7 @@ async function runChat(id, payload) {
 	const model = String(payload?.model ?? "claude-sonnet-4-5").trim();
 	const systemPrompt = typeof payload?.systemPrompt === "string" ? payload.systemPrompt : "";
 	const cwd = typeof payload?.cwd === "string" && payload.cwd.trim() ? payload.cwd : process.cwd();
+	const maxTurns = normalizeMaxTurns(payload?.maxTurns);
 	const resumeSessionId = typeof payload?.resumeSessionId === "string" && payload.resumeSessionId.trim()
 		? payload.resumeSessionId.trim()
 		: undefined;
@@ -295,11 +305,11 @@ async function runChat(id, payload) {
 
 	const buildQueryOptions = (sessionToResume) => {
 		const options = {
-				model,
-				cwd,
-				executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
-				pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE,
-				maxTurns: 8,
+			model,
+			cwd,
+			executable: process.env.OBSIDIAN_AI_NODE_PATH || "node",
+			pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE,
+			maxTurns,
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true,
 			includePartialMessages: true,

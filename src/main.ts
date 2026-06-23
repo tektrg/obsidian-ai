@@ -8,7 +8,7 @@ import { CLAUDE_CHAT_VIEW_TYPE, ClaudeChatView } from "./chat/ClaudeChatView";
 import { OnboardingModal } from "./chat/OnboardingModal";
 import { ActiveFileContextService, PromptContextSnapshot, formatPromptWithContext } from "./editor/ActiveFileContext";
 import { EditorChangeApplier } from "./editor/EditorChangeApplier";
-import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab } from "./settings";
+import { DEFAULT_SETTINGS, ObsidianAiSettings, ObsidianAiSettingTab, normalizeClaudeMaxTurns } from "./settings";
 import type { FileChange } from "./types/diff";
 
 const CLAUDE_MODEL_LABELS: Record<string, string> = {
@@ -206,6 +206,7 @@ export default class ObsidianAiPlugin extends Plugin {
 			systemPrompt: this.settings.chatSystemPrompt,
 			cwd: vaultBasePath,
 			env: runtimeEnv,
+			maxTurns: this.settings.claudeMaxTurns,
 		}, piAuth);
 		new Notice("Connection test succeeded");
 	}
@@ -308,6 +309,7 @@ export default class ObsidianAiPlugin extends Plugin {
 			env: runtimeEnv,
 			activeFilePath: activeFilePath,
 			resumeSessionId: options?.resumeSessionId,
+			maxTurns: this.settings.claudeMaxTurns,
 		}, piAuth, handlers);
 		if (result.fileChanged) {
 			const editedPath = result.editedFilePath ?? activeFilePath ?? "active note";
@@ -467,6 +469,7 @@ export default class ObsidianAiPlugin extends Plugin {
 			...DEFAULT_SETTINGS.selectedModelsByProvider,
 			...loaded?.selectedModelsByProvider,
 		};
+		this.settings.claudeMaxTurns = normalizeClaudeMaxTurns(loaded?.claudeMaxTurns);
 	}
 
 	async saveSettings() {

@@ -60,7 +60,8 @@ export class ClaudeSdkBridge extends BaseBridge {
 				cwd: params.cwd,
 				activeFilePath: params.activeFilePath,
 				resumeSessionId: params.resumeSessionId,
-				// Claude SDK doesn't support maxTurns or thinkingLevel
+				maxTurns: params.maxTurns,
+				// Claude SDK doesn't support thinkingLevel
 			},
 		};
 	}

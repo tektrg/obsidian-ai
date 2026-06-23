@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type { AuthMode } from "./auth/types";
-import ObsidianAiPlugin from "./main";
+import type ObsidianAiPlugin from "./main";
 
 export interface ObsidianAiSettings {
 	authMode: "anthropic-api-key" | "claude-max" | "chatgpt-plus";
@@ -8,6 +8,7 @@ export interface ObsidianAiSettings {
 	defaultClaudeModel: string;
 	defaultPiModel: string;
 	selectedModelsByProvider: Partial<Record<AuthMode, string>>;
+	claudeMaxTurns: number;
 	chatSystemPrompt: string;
 	requireConfirmForWholeNoteReplace: boolean;
 	/** Persisted Claude SDK session id so the chat panel resumes context across restarts. */
@@ -32,6 +33,16 @@ export interface ObsidianAiSettings {
 	onboardingCompleted: boolean;
 }
 
+export const DEFAULT_CLAUDE_MAX_TURNS = 100;
+export const MIN_CLAUDE_MAX_TURNS = 1;
+export const MAX_CLAUDE_MAX_TURNS = 500;
+
+export function normalizeClaudeMaxTurns(value: unknown): number {
+	const parsed = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(parsed)) return DEFAULT_CLAUDE_MAX_TURNS;
+	return Math.min(MAX_CLAUDE_MAX_TURNS, Math.max(MIN_CLAUDE_MAX_TURNS, Math.floor(parsed)));
+}
+
 export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 	authMode: "anthropic-api-key",
 	anthropicApiKey: "",
@@ -42,6 +53,7 @@ export const DEFAULT_SETTINGS: ObsidianAiSettings = {
 		"claude-max": "claude-sonnet-4-5-20250929",
 		"chatgpt-plus": "auto",
 	},
+	claudeMaxTurns: DEFAULT_CLAUDE_MAX_TURNS,
 	chatSystemPrompt: "You are a concise assistant helping with Obsidian notes.",
 	requireConfirmForWholeNoteReplace: true,
 	chatSessionId: "",
@@ -152,6 +164,25 @@ export class ObsidianAiSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					this.plugin.refreshChatViewsSettingsState();
 				}));
+
+		new Setting(containerEl)
+			.setName("Claude max turns")
+			.setDesc(`Maximum Claude Code tool turns per chat request. Default is ${DEFAULT_CLAUDE_MAX_TURNS}.`)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text.inputEl.min = String(MIN_CLAUDE_MAX_TURNS);
+				text.inputEl.max = String(MAX_CLAUDE_MAX_TURNS);
+				text.inputEl.step = "1";
+				text
+					.setPlaceholder(String(DEFAULT_CLAUDE_MAX_TURNS))
+					.setValue(String(this.plugin.settings.claudeMaxTurns))
+					.onChange(async (value) => {
+						this.plugin.settings.claudeMaxTurns = normalizeClaudeMaxTurns(value);
+						text.setValue(String(this.plugin.settings.claudeMaxTurns));
+						await this.plugin.saveSettings();
+						this.plugin.refreshChatViewsSettingsState();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName("Claude OAuth code")

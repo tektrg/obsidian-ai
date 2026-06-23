@@ -13,6 +13,12 @@ import { FileMentionController } from "./FileMentionController";
 import { StreamingBlockController } from "./StreamingBlockController";
 import { AuthCardView } from "./AuthCardView";
 import { ClaudeMaxLoginCoordinator } from "../auth/ClaudeMaxLoginCoordinator";
+import {
+	DEFAULT_CLAUDE_MAX_TURNS,
+	MAX_CLAUDE_MAX_TURNS,
+	MIN_CLAUDE_MAX_TURNS,
+	normalizeClaudeMaxTurns,
+} from "../settings";
 
 export const CLAUDE_CHAT_VIEW_TYPE = "claude-chat-view";
 
@@ -443,6 +449,26 @@ export class ClaudeChatView extends ItemView {
 		const statusSection = panel.createDiv({ cls: "claude-chat-settings-status" });
 		setIcon(statusSection.createSpan({ cls: "claude-chat-settings-status-icon" }), "info");
 		statusSection.createSpan({ text: this.classifySession(session).labelText });
+
+		const configSection = panel.createDiv({ cls: "claude-chat-settings-config" });
+		const maxTurnsLabel = configSection.createEl("label", { cls: "claude-chat-settings-field" });
+		maxTurnsLabel.createSpan({ text: "Claude max turns", cls: "claude-chat-settings-field-label" });
+		const maxTurnsInput = maxTurnsLabel.createEl("input", {
+			cls: "claude-chat-settings-number-input",
+			attr: {
+				type: "number",
+				min: String(MIN_CLAUDE_MAX_TURNS),
+				max: String(MAX_CLAUDE_MAX_TURNS),
+				step: "1",
+				placeholder: String(DEFAULT_CLAUDE_MAX_TURNS),
+				value: String(this.plugin.settings.claudeMaxTurns),
+			},
+		});
+		maxTurnsInput.addEventListener("change", async () => {
+			this.plugin.settings.claudeMaxTurns = normalizeClaudeMaxTurns(maxTurnsInput.value);
+			maxTurnsInput.value = String(this.plugin.settings.claudeMaxTurns);
+			await this.plugin.saveSettings();
+		});
 
 		const actionsSection = panel.createDiv({ cls: "claude-chat-settings-actions" });
 

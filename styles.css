@@ -866,6 +866,37 @@
 	align-items: center;
 }
 
+.claude-chat-settings-config {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.claude-chat-settings-field {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 72px;
+	align-items: center;
+	gap: 12px;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.claude-chat-settings-field-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.claude-chat-settings-number-input {
+	width: 72px;
+	min-width: 0;
+	padding: 4px 6px;
+	font-size: 13px;
+}
+
 .claude-chat-settings-actions {
 	display: flex;
 	flex-direction: column;
