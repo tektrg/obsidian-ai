@@ -16,6 +16,11 @@ AI Chat Sidebar is a desktop-only Obsidian plugin that adds an AI chat sidebar w
 - Active note context and file mentions
 - Multi-file diff review UI
 
+## Support
+
+For support, updates, and product notes, visit [theindie.app](https://theindie.app/).
+You can also email [yourfriend@indieapp.app](mailto:yourfriend@indieapp.app).
+
 ## Disclosures
 
 - Account requirements: Claude Max, an Anthropic API key, or ChatGPT Plus/OpenAI access is required depending on the selected provider.
